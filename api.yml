@@ -164,7 +164,9 @@ definitions:
       epgUpdatedAt:
         $ref: '#/definitions/UnixtimeMS'
       channel:
-        $ref: '#/definitions/Channel'
+        type: array
+        items:
+          $ref: '#/definitions/Channel'
 
   # program -------------------------------------------------------------------
 
