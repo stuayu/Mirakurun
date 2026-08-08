@@ -60,6 +60,14 @@ Mirakurun は、日本のデジタル TV チューナー向け API サーバー�
 - `Operation` と `apiDoc` は既存パターンに合わせる。
 - API パス、レスポンス、リクエスト body、定義型を変える場合は `api.yml` と整合させる。
 - 公開型を変える場合は `api.d.ts` と必要に応じて `index.d.ts` も更新する。
+- **`api.yml` は `GET /api/docs` がそのまま返す定義であり、クライアントライブラリ (npm `mirakurun`) は
+  `/docs` の定義から operationId・パス・パラメータ位置を解決する。実装と食い違うとクライアント側の
+  型解釈と実データがずれる。** レスポンス型を触るときは必ず「実装 (`src/Mirakurun/**` の `export()` /
+  `toItem()` など)・`api.d.ts`・`api.yml`」の三者を突き合わせる。
+  - 過去に `Service.channel` が実装・`api.d.ts` では配列、`api.yml` では単数 (`$ref: '#/definitions/Channel'`)
+    になっていた不整合があった (2026-08-09 に `api.yml` を配列へ修正)。同種の不整合を再発させないこと。
+  - `ChannelType` の enum はフォーク独自の `NW1`〜`NW40` を含む。`src/Mirakurun/common.ts` の
+    `channelTypes` と `api.d.ts` と `api.yml` の 3 か所を必ず揃える。
 - ストリーム系 API はチューナー資源、エラー変換、接続終了時の後処理に注意する。
 
 ## UI 変更時の注意
