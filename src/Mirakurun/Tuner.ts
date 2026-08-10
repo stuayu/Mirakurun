@@ -24,6 +24,37 @@ import ServiceItem from "./ServiceItem";
 import TSFilter from "./TSFilter";
 import TSDecoder from "./TSDecoder";
 
+/** サービススキャンの既定タイムアウト (ms) */
+const SERVICE_SCAN_TIMEOUT = 1000 * 20;
+
+/**
+ * 新4K8K衛星放送 (MMT/TLV) の既定タイムアウト (ms)
+ * MMT/TLV を MPEG-2 TS へ変換するフロントエンド (dantto4k 等) は選局に 15〜20 秒かかることがあり、
+ * 既定の 20 秒ではサービス情報を取得しきれずスキャンが失敗する。
+ */
+const SERVICE_SCAN_TIMEOUT_4K = 1000 * 40;
+
+/** 新4K8K衛星放送のチャンネル種別 */
+const CHANNEL_TYPES_4K: apid.ChannelType[] = ["BS4K", "CS4K"];
+
+/**
+ * サービススキャンのタイムアウトを決める
+ *
+ * @param channel 対象チャンネル
+ * @return タイムアウト (ms)
+ */
+function getServiceScanTimeout(channel: ChannelItem[]): number {
+    if (typeof _.config.server.serviceScanTimeout === "number") {
+        return _.config.server.serviceScanTimeout;
+    }
+
+    if (channel.some(ch => CHANNEL_TYPES_4K.includes(ch.type))) {
+        return SERVICE_SCAN_TIMEOUT_4K;
+    }
+
+    return SERVICE_SCAN_TIMEOUT;
+}
+
 export class Tuner {
     private _devices: TunerDevice[] = [];
     private _readyForJobPickedDeviceSet: Set<TunerDevice> = new Set();
@@ -226,7 +257,7 @@ export class Tuner {
             };
             let services: apid.Service[] = null;
 
-            setTimeout(() => tsFilter.close(), 20000);
+            setTimeout(() => tsFilter.close(), getServiceScanTimeout(channel));
 
             Promise.all<void>([
                 new Promise((resolve, reject) => {

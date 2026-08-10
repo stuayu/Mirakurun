@@ -58,6 +58,7 @@
 | `programGCJobSchedule` | `PROGRAM_GC_JOB_SCHEDULE` | String | `45 * * * *` | Program list GC schedule (cron-like format) |
 | `epgGatheringJobSchedule` | `EPG_GATHERING_JOB_SCHEDULE` | String | `20,50 * * * *` | EPG gathering schedule (cron-like format) |
 | `epgRetrievalTime` | `EPG_RETRIEVAL_TIME` | Integer | `600000` | EPG retrieval time (milliseconds) |
+| `serviceScanTimeout` | `SERVICE_SCAN_TIMEOUT` | Integer | `20000` (`40000` for `BS4K` / `CS4K`) | Service scan timeout (milliseconds)<br>**※ Tuning takes longer on the 4K/8K satellite broadcasting (`BS4K` / `CS4K`), so the default is longer. If set, the value is used for every channel type** |
 | `logoDataInterval` | `LOGO_DATA_INTERVAL` | Integer | `604800000` | Logo data update interval (milliseconds) |
 | `disableEITParsing` | `DISABLE_EIT_PARSING` | Boolean | `false` | ⚠️Disable EIT parsing |
 | `disableWebUI` | `DISABLE_WEB_UI` | Boolean | `false` | ⚠️Disable Web UI |
@@ -82,11 +83,13 @@
 ```yaml
 # Array
 - name: TunerIdentificationName # String
-  types: # (GR|BS|CS|SKY)[]
+  types: # (GR|BS|CS|SKY|NW1~NW40|BS4K|CS4K)[]
     - GR
     - BS
     - CS
     - SKY
+    - BS4K # 4K/8K satellite broadcasting (BS)
+    - CS4K # 4K/8K satellite broadcasting (CS)
   # For chardev/dvb
   # "<template>" will be replaced with `commandVars[template]` or "(empty)" *@4.0.0~
   command: cmd <channel> --arg1 --arg2 <exampleArg1> <exampleArg2>... # String
@@ -133,7 +136,7 @@ sudo npm install arib-b25-stream-test -g --unsafe-perm
 ```yaml
 # Array
 - name: ChannelIdentificationName # String
-  type: GR # Enum [GR|BS|CS|SKY]
+  type: GR # Enum [GR|BS|CS|SKY|NW1~NW40|BS4K|CS4K]
   channel: '0' # String
   # Optional parameters below
   serviceId: 1234 # Integer - Services will be automatically scanned if not specified.
@@ -147,3 +150,38 @@ sudo npm install arib-b25-stream-test -g --unsafe-perm
     exampleArg2: -arg2 "Can include spaces using quotes"
   isDisabled: false # Boolean
 ```
+
+### 4K/8K Satellite Broadcasting (`BS4K` / `CS4K`)
+
+The Japanese 4K/8K satellite broadcasting (ISDB-S3) is transmitted as **MMT/TLV**, not MPEG-2 TS.
+Mirakurun expects the stream to be **converted into MPEG-2 TS by the frontend**
+(e.g. [dantto4k](https://github.com/nekohkr/dantto4k)). After the conversion it is handled as an
+ordinary TS, so EPG (derived from MH-EIT), service information and subtitles work as usual.
+
+```yaml
+# tuners.yml (example)
+- name: BS4K-1
+  types:
+    - BS4K
+  # Windows: BonDriver_dantto4k descrambles and converts the stream into MPEG-2 TS
+  command: BonRecTest.exe --space <space> --ch <channel> --pipe BonDriver_dantto4k.dll -
+  # Linux: pipe the tuner output into dantto4k
+  # command: recisdb tune --device /dev/px4video0 --channel <channel> - | dantto4k --no-progress --no-stats - -
+```
+
+```yaml
+# channels.yml (example)
+- name: NHK BS4K
+  type: BS4K
+  channel: BS4K01_0 # depends on the channel space of the tuner command
+  serviceId: 4011
+```
+
+Notes:
+
+- The `channel` identifier **depends on the channel space of the tuner command** (BonDriver, etc.).
+  The channel scan (`/api/config/channels/scan`) defaults to `BS4K{ch00}_{subch}` (ch 1-23 / subch 0-3)
+  for `BS4K` and `CS4K{ch}` (ch 2-24) for `CS4K`; use `channelNameFormat` to override it
+- Converting MMT/TLV into MPEG-2 TS may take 15-20 seconds to tune, so the service scan timeout
+  defaults to 40 seconds for `BS4K` / `CS4K`. Set `serviceScanTimeout` if it is still not enough
+- The output video is HEVC (H.265) and the audio is MPEG-4 AAC, so the client side must support them

@@ -130,6 +130,8 @@ definitions:
       - NW38
       - NW39
       - NW40
+      - BS4K
+      - CS4K
 
 
   # service -------------------------------------------------------------------
@@ -604,6 +606,8 @@ definitions:
       epgGatheringJobSchedule:
         type: string
       epgRetrievalTime:
+        type: integer
+      serviceScanTimeout:
         type: integer
       logoDataInterval:
         type: integer

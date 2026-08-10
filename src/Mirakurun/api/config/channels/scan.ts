@@ -111,7 +111,9 @@ const channelOrder: Record<apid.ChannelType, number> = {
     NW37: 41,
     NW38: 42,
     NW39: 43,
-    NW40: 44
+    NW40: 44,
+    BS4K: 45,
+    CS4K: 46
 };
 
 /**
@@ -121,6 +123,8 @@ const CHANNEL_NAME_FORMAT_GR = "{ch}";                // GR channel format
 const CHANNEL_NAME_FORMAT_BS = "{ch}";                // BS channel format
 const CHANNEL_NAME_FORMAT_BS_SUBCH = "BS{ch00}_{subch}"; // BS subchannel format
 const CHANNEL_NAME_FORMAT_CS = "CS{ch}";              // CS channel format
+const CHANNEL_NAME_FORMAT_BS4K = "BS4K{ch00}_{subch}"; // BS 4K (新4K8K衛星放送) channel format
+const CHANNEL_NAME_FORMAT_CS4K = "CS4K{ch}";           // CS 4K (新4K8K衛星放送) channel format
 
 /**
  * Global flag to track if scan cancellation is requested
@@ -291,6 +295,51 @@ export function generateScanConfig(option: ChannelScanOption): ScanConfig | unde
                 .map(ch => formatChannelName(channelFormat, ch)),
             scanMode: csOptions.scanMode,
             setDisabledOnAdd: csOptions.setDisabledOnAdd
+        };
+    }
+
+    // Handle BS 4K (新4K8K衛星放送) channels
+    // MMT/TLV は BonDriver 等のフロントエンド側で MPEG-2 TS へ変換される前提のため、
+    // チャンネル識別子はチューナーコマンドの空間に依存する。channelNameFormat で上書きできる。
+    if (option.type === "BS4K") {
+        const bs4kOptions = {
+            startCh: 1,
+            endCh: 23,
+            startSubCh: 0,
+            endSubCh: 3,
+            ...satelliteOptions
+        };
+
+        const channels: string[] = [];
+        const channelFormat = bs4kOptions.channelNameFormat || CHANNEL_NAME_FORMAT_BS4K;
+
+        for (const ch of range(bs4kOptions.startCh, bs4kOptions.endCh)) {
+            for (const subCh of range(bs4kOptions.startSubCh, bs4kOptions.endSubCh)) {
+                channels.push(formatChannelName(channelFormat, ch, subCh));
+            }
+        }
+
+        return {
+            channels,
+            scanMode: bs4kOptions.scanMode,
+            setDisabledOnAdd: bs4kOptions.setDisabledOnAdd
+        };
+    }
+
+    // Handle CS 4K (新4K8K衛星放送) channels
+    if (option.type === "CS4K") {
+        const cs4kOptions = {
+            startCh: 2,
+            endCh: 24,
+            ...satelliteOptions
+        };
+
+        const channelFormat = cs4kOptions.channelNameFormat || CHANNEL_NAME_FORMAT_CS4K;
+        return {
+            channels: range(cs4kOptions.startCh, cs4kOptions.endCh)
+                .map(ch => formatChannelName(channelFormat, ch)),
+            scanMode: cs4kOptions.scanMode,
+            setDisabledOnAdd: cs4kOptions.setDisabledOnAdd
         };
     }
 
@@ -970,7 +1019,8 @@ About BS Subchannel Style:
                 "NW1", "NW2", "NW3", "NW4", "NW5", "NW6", "NW7", "NW8", "NW9", "NW10",
                 "NW11", "NW12", "NW13", "NW14", "NW15", "NW16", "NW17", "NW18", "NW19", "NW20",
                 "NW21", "NW22", "NW23", "NW24", "NW25", "NW26", "NW27", "NW28", "NW29", "NW30",
-                "NW31", "NW32", "NW33", "NW34", "NW35", "NW36", "NW37", "NW38", "NW39", "NW40"],
+                "NW31", "NW32", "NW33", "NW34", "NW35", "NW36", "NW37", "NW38", "NW39", "NW40",
+                "BS4K", "CS4K"],
             default: "GR",
             description: "Specifies the channel type to scan."
         },

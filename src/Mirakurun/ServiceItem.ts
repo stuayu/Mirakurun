@@ -293,6 +293,12 @@ export default class ServiceItem {
         case "NW40":
             order = "44";
             break;
+        case "BS4K":
+            order = "45";
+            break;
+        case "CS4K":
+            order = "46";
+            break;
 
         }
 

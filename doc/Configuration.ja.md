@@ -58,6 +58,7 @@
 | `programGCJobSchedule` | `PROGRAM_GC_JOB_SCHEDULE` | String | `45 * * * *` | 番組一覧の GC スケジュール (cron 風形式) |
 | `epgGatheringJobSchedule` | `EPG_GATHERING_JOB_SCHEDULE` | String | `20,50 * * * *` | EPG 収集スケジュール (cron 風形式) |
 | `epgRetrievalTime` | `EPG_RETRIEVAL_TIME` | Integer | `600000` | EPG 取得時間 (ミリ秒) |
+| `serviceScanTimeout` | `SERVICE_SCAN_TIMEOUT` | Integer | `20000` (`BS4K` / `CS4K` は `40000`) | サービススキャンのタイムアウト (ミリ秒)<br>**※新4K8K衛星放送 (`BS4K` / `CS4K`) は選局に時間がかかるため既定値を長くしている。指定するとチャンネル種別によらずその値を使う** |
 | `logoDataInterval` | `LOGO_DATA_INTERVAL` | Integer | `604800000` | ロゴデータ更新間隔 (ミリ秒) |
 | `disableEITParsing` | `DISABLE_EIT_PARSING` | Boolean | `false` | ⚠️EIT パースの無効化 |
 | `disableWebUI` | `DISABLE_WEB_UI` | Boolean | `false` | ⚠️Web UI の無効化 |
@@ -82,11 +83,13 @@
 ```yaml
 # 配列
 - name: チューナー識別名 # String
-  types: # (GR|BS|CS|SKY)[]
+  types: # (GR|BS|CS|SKY|NW1~NW40|BS4K|CS4K)[]
     - GR
     - BS
     - CS
     - SKY
+    - BS4K # 新4K8K衛星放送 (BS)
+    - CS4K # 新4K8K衛星放送 (CS)
   # chardev/dvb用
   # "<template>"は`commandVars[template]`または"(空)"に置き換えられます *@4.0.0~
   command: cmd <channel> --arg1 --arg2 <exampleArg1> <exampleArg2>... # String
@@ -133,7 +136,7 @@ sudo npm install arib-b25-stream-test -g --unsafe-perm
 ```yaml
 # 配列
 - name: チャンネル識別名 # String
-  type: GR # 列挙型 [GR|BS|CS|SKY]
+  type: GR # 列挙型 [GR|BS|CS|SKY|NW1~NW40|BS4K|CS4K]
   channel: '0' # String
   # 以下はオプション
   serviceId: 1234 # Integer - 指定しない場合、サービスは自動的にスキャンされます。
@@ -147,3 +150,38 @@ sudo npm install arib-b25-stream-test -g --unsafe-perm
     exampleArg2: -arg2 "引用符を使用して空白を含むことができます"
   isDisabled: false # Boolean
 ```
+
+### 新4K8K衛星放送 (`BS4K` / `CS4K`)
+
+新4K8K衛星放送 (ISDB-S3) は MPEG-2 TS ではなく **MMT/TLV** で送出されるため、Mirakurun は
+**フロントエンド側で MPEG-2 TS へ変換されたストリーム**を受け取る前提で対応している
+(変換には [dantto4k](https://github.com/nekohkr/dantto4k) などを使う)。
+変換後は通常の TS として扱えるため、EPG (MH-EIT 由来)・サービス情報・字幕はそのまま利用できる。
+
+```yaml
+# tuners.yml (例)
+- name: BS4K-1
+  types:
+    - BS4K
+  # Windows: BonDriver_dantto4k が復号と MPEG-2 TS への変換を行う
+  command: BonRecTest.exe --space <space> --ch <channel> --pipe BonDriver_dantto4k.dll -
+  # Linux: 受信コマンドの出力を dantto4k にパイプする
+  # command: recisdb tune --device /dev/px4video0 --channel <channel> - | dantto4k --no-progress --no-stats - -
+```
+
+```yaml
+# channels.yml (例)
+- name: NHK BS4K
+  type: BS4K
+  channel: BS4K01_0 # チューナーコマンドのチャンネル空間に合わせる
+  serviceId: 4011
+```
+
+注意点:
+
+- `channel` に書く識別子は**チューナーコマンド (BonDriver など) のチャンネル空間に依存する**。
+  チャンネルスキャン (`/api/config/channels/scan`) の既定は `BS4K` が `BS4K{ch00}_{subch}` (ch 1〜23 / subch 0〜3)、
+  `CS4K` が `CS4K{ch}` (ch 2〜24) だが、環境に合わせて `channelNameFormat` で上書きできる
+- MMT/TLV → MPEG-2 TS の変換は選局に 15〜20 秒程度かかることがあるため、サービススキャンのタイムアウトは
+  `BS4K` / `CS4K` のとき既定で 40 秒になる。足りない場合は `serviceScanTimeout` を指定する
+- 映像は HEVC (H.265)、音声は MPEG-4 AAC で出力されるため、視聴・録画するクライアント側の対応が必要

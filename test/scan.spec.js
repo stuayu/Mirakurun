@@ -502,6 +502,74 @@ describe("[scan.spec] /api/config/channel/scan : generateScanConfig", () => {
             setDisabledOnAdd: false
         });
     });
+
+    it("BS4K: Type only", () => {
+        const config = scan.generateScanConfig({
+            type: "BS4K"
+        });
+        // BS01_0 〜 BS23_3 と同じ並びの 4K 版 (23ch × 4subch)
+        assert.strictEqual(config.channels.length, 23 * 4);
+        assert.strictEqual(config.channels[0], "BS4K01_0");
+        assert.strictEqual(config.channels[3], "BS4K01_3");
+        assert.strictEqual(config.channels[config.channels.length - 1], "BS4K23_3");
+        assert.strictEqual(config.scanMode, "Service");
+        assert.strictEqual(config.setDisabledOnAdd, true);
+    });
+
+    it("BS4K: Ch and subCh", () => {
+        const config = scan.generateScanConfig({
+            type: "BS4K",
+            startCh: 1,
+            endCh: 2,
+            startSubCh: 0,
+            endSubCh: 1
+        });
+        assert.deepStrictEqual(config, {
+            channels: ["BS4K01_0", "BS4K01_1", "BS4K02_0", "BS4K02_1"],
+            scanMode: "Service",
+            setDisabledOnAdd: true
+        });
+    });
+
+    it("BS4K: channelNameFormat (チューナーコマンドの空間に合わせて上書きできる)", () => {
+        const config = scan.generateScanConfig({
+            type: "BS4K",
+            startCh: 1,
+            endCh: 2,
+            startSubCh: 0,
+            endSubCh: 0,
+            channelNameFormat: "BS4K_{ch}"
+        });
+        assert.deepStrictEqual(config, {
+            channels: ["BS4K_1", "BS4K_2"],
+            scanMode: "Service",
+            setDisabledOnAdd: true
+        });
+    });
+
+    it("CS4K: Type only", () => {
+        const config = scan.generateScanConfig({
+            type: "CS4K"
+        });
+        assert.deepStrictEqual(config, {
+            channels: ["CS4K2", "CS4K3", "CS4K4", "CS4K5", "CS4K6", "CS4K7", "CS4K8", "CS4K9", "CS4K10", "CS4K11", "CS4K12", "CS4K13", "CS4K14", "CS4K15", "CS4K16", "CS4K17", "CS4K18", "CS4K19", "CS4K20", "CS4K21", "CS4K22", "CS4K23", "CS4K24"],
+            scanMode: "Service",
+            setDisabledOnAdd: true
+        });
+    });
+
+    it("CS4K: startCh and endCh", () => {
+        const config = scan.generateScanConfig({
+            type: "CS4K",
+            startCh: 2,
+            endCh: 4
+        });
+        assert.deepStrictEqual(config, {
+            channels: ["CS4K2", "CS4K3", "CS4K4"],
+            scanMode: "Service",
+            setDisabledOnAdd: true
+        });
+    });
 });
 
 describe("[scan.spec] /api/config/channel/scan : generateChannelItemForService", () => {

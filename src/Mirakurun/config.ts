@@ -44,6 +44,7 @@ const {
     PROGRAM_GC_JOB_SCHEDULE,
     EPG_GATHERING_JOB_SCHEDULE,
     EPG_RETRIEVAL_TIME,
+    SERVICE_SCAN_TIMEOUT,
     LOGO_DATA_INTERVAL,
     DISABLE_EIT_PARSING,
     DISABLE_WEB_UI,
@@ -157,6 +158,9 @@ export async function loadServer(): Promise<Server> {
         }
         if (typeof EPG_RETRIEVAL_TIME !== "undefined" && /^[0-9]+$/.test(EPG_RETRIEVAL_TIME)) {
             config.epgRetrievalTime = parseInt(EPG_RETRIEVAL_TIME, 10);
+        }
+        if (typeof SERVICE_SCAN_TIMEOUT !== "undefined" && /^[0-9]+$/.test(SERVICE_SCAN_TIMEOUT)) {
+            config.serviceScanTimeout = parseInt(SERVICE_SCAN_TIMEOUT, 10);
         }
         if (typeof LOGO_DATA_INTERVAL !== "undefined" && /^[0-9]+$/.test(LOGO_DATA_INTERVAL)) {
             config.logoDataInterval = parseInt(LOGO_DATA_INTERVAL, 10);
