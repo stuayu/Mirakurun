@@ -18,6 +18,7 @@ import * as api from "../../../api";
 import * as apid from "../../../../../api";
 import * as config from "../../../config";
 import _ from "../../../_";
+import ChannelItem from "../../../ChannelItem";
 
 /**
  * Options for a channel scan operation
@@ -735,10 +736,12 @@ async function runChannelScan(
             let services: apid.Service[];
             try {
                 // Get services from the tuner
-                services = await _.tuner.getServices(<any> {
+                const channelItem = new ChannelItem({
+                    name: `${type}:${channel}`,
                     type,
                     channel
-                }, {
+                });
+                services = await _.tuner.getServices([channelItem], {
                     id: "Mirakurun:API:channelScan",
                     priority: 1
                 });
