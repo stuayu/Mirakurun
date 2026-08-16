@@ -161,10 +161,12 @@ export const ChannelsConfigView: React.FC = () => {
                 params.append("skipCh", expandedSkipCh);
             }
 
-            if (scanType === "BS" && scanUseSubCh) {
+            if ((scanType === "BS" || scanType === "BS4K") && scanUseSubCh) {
                 params.append("minSubCh", scanMinSubCh);
                 params.append("maxSubCh", scanMaxSubCh);
-                params.append("useSubCh", "true");
+                if (scanType === "BS") {
+                    params.append("useSubCh", "true");
+                }
             }
 
             if (!scanAutoApply) {
@@ -566,7 +568,9 @@ export const ChannelsConfigView: React.FC = () => {
                                         options={[
                                             { value: "GR", label: "GR" },
                                             { value: "BS", label: "BS" },
+                                            { value: "BS4K", label: "BS4K" },
                                             { value: "CS", label: "CS" },
+                                            { value: "CS4K", label: "CS4K" },
                                             { value: "SKY", label: "SKY" },
                                             ...[...Array(40)].map((_, i) => ({ value: `NW${i + 1}`, label: `NW${i + 1}` }))
                                         ]}
@@ -738,7 +742,17 @@ export const ChannelsConfigView: React.FC = () => {
                                             setScanMinCh("1");
                                             setScanMaxCh("23");
                                             break;
+                                        case "BS4K":
+                                            setScanMinCh("1");
+                                            setScanMaxCh("23");
+                                            setScanMinSubCh("0");
+                                            setScanMaxSubCh("3");
+                                            break;
                                         case "CS":
+                                            setScanMinCh("2");
+                                            setScanMaxCh("24");
+                                            break;
+                                        case "CS4K":
                                             setScanMinCh("2");
                                             setScanMaxCh("24");
                                             break;
@@ -753,7 +767,9 @@ export const ChannelsConfigView: React.FC = () => {
                                 options={[
                                     { value: "GR", label: "GR" },
                                     { value: "BS", label: "BS" },
+                                    { value: "BS4K", label: "BS4K" },
                                     { value: "CS", label: "CS" },
+                                    { value: "CS4K", label: "CS4K" },
                                     ...[...Array(40)].map((_, i) => ({ value: `NW${i + 1}`, label: `NW${i + 1}` }))
                                 ]}
                             />
@@ -790,10 +806,10 @@ export const ChannelsConfigView: React.FC = () => {
                             />
                         </FormGroup>
 
-                        {scanType === "BS" && (
+                        {(scanType === "BS" || scanType === "BS4K") && (
                             <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
                                 <Switch
-                                    label="Use Subchannel Style (BS01_0)"
+                                    label={`Use Subchannel Style (${scanType}01_0)`}
                                     checked={scanUseSubCh}
                                     onChange={(e) => setScanUseSubCh(e.currentTarget.checked)}
                                 />
