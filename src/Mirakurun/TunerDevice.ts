@@ -27,6 +27,10 @@ import ChannelItem from "./ChannelItem";
 import TSFilter from "./TSFilter";
 import Client, { ProgramsQuery } from "../client";
 
+// 選局に時間がかかるチューナーでは、プロセスの再起動間隔も長くなるため、
+// 連続異常終了の判定はこの時間内の失敗だけを対象にする。
+const PROCESS_FAILURE_WINDOW = 60 * 1000;
+
 interface User extends common.User {
     _stream?: TSFilter;
 }
@@ -57,6 +61,7 @@ export default class TunerDevice extends EventEmitter {
     private _isRemote = false;
     private _isFault = false;
     private _fatalCount = 0;
+    private _lastProcessFailureAt = 0;
     private _exited = false;
     private _closing = false;
 
@@ -306,9 +311,18 @@ export default class TunerDevice extends EventEmitter {
 
         this._process.once("exit", () => this._exited = true);
 
-        this._process.once("error", (err) => {
-            log.fatal("TunerDevice#%d process error `%s` (pid=%d)", this._index, err.name, this._process.pid);
+        let processFailureReported = false;
+        const reportProcessFailure = (): void => {
+            if (processFailureReported === true || this._closing === true) {
+                return;
+            }
 
+            processFailureReported = true;
+            const now = Date.now();
+            if (now - this._lastProcessFailureAt > PROCESS_FAILURE_WINDOW) {
+                this._fatalCount = 0;
+            }
+            this._lastProcessFailureAt = now;
             ++this._fatalCount;
             if (this._fatalCount >= 3) {
                 log.fatal("TunerDevice#%d has something fault! **RESTART REQUIRED** after fix it.", this._index);
@@ -316,6 +330,12 @@ export default class TunerDevice extends EventEmitter {
                 this._isFault = true;
                 this._closing = true;
             }
+        };
+
+        this._process.once("error", (err) => {
+            log.fatal("TunerDevice#%d process error `%s` (pid=%d)", this._index, err.name, this._process.pid);
+
+            reportProcessFailure();
             this._end();
             setTimeout(this._release.bind(this), this._config.dvbDevicePath ? 1000 : 100);
         });
@@ -326,6 +346,7 @@ export default class TunerDevice extends EventEmitter {
                 this._index, code, signal, this._process.pid
             );
 
+            reportProcessFailure();
             this._end();
             setTimeout(this._release.bind(this), this._config.dvbDevicePath ? 1000 : 100);
         });
@@ -422,6 +443,7 @@ export default class TunerDevice extends EventEmitter {
         }
 
         this._fatalCount = 0;
+        this._lastProcessFailureAt = 0;
         this._channel = null;
         this._users.clear();
 

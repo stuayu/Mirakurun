@@ -32,6 +32,7 @@ export default class TunerDevice extends EventEmitter {
     private _isRemote;
     private _isFault;
     private _fatalCount;
+    private _lastProcessFailureAt;
     private _exited;
     private _closing;
     constructor(_index: number, _config: apid.ConfigTunersItem);
