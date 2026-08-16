@@ -35,6 +35,14 @@ interface ChannelScanOption {
     channelNameFormat?: string;        // Custom channel name format
 }
 
+function parseBooleanQuery(value: unknown): boolean | undefined {
+    if (value === undefined) {
+        return undefined;
+    }
+
+    return value === true || value === "true" || value === "1";
+}
+
 /**
  * Configuration for a scan operation
  */
@@ -226,6 +234,25 @@ export function generateScanConfig(option: ChannelScanOption): ScanConfig | unde
                 .map(ch => formatChannelName(channelFormat, ch)),
             scanMode: grOptions.scanMode,
             setDisabledOnAdd: grOptions.setDisabledOnAdd
+        };
+    }
+
+    // Network tuners use the same numeric terrestrial channel space as GR.
+    if (/^NW(?:[1-9]|[1-3][0-9]|40)$/.test(option.type)) {
+        const nwOptions = {
+            startCh: 13,
+            endCh: 62,
+            scanMode: "Channel" as const,
+            setDisabledOnAdd: false,
+            ...option
+        };
+
+        const channelFormat = nwOptions.channelNameFormat || CHANNEL_NAME_FORMAT_GR;
+        return {
+            channels: range(nwOptions.startCh, nwOptions.endCh)
+                .map(ch => formatChannelName(channelFormat, ch)),
+            scanMode: nwOptions.scanMode,
+            setDisabledOnAdd: nwOptions.setDisabledOnAdd
         };
     }
 
@@ -902,7 +929,11 @@ export const put: Operation = async (req, res) => {
     const refresh = Boolean(req.query.refresh);
 
     // Parse skipCh parameter
-    const skipCh: number[] = req.query?.skipCh as any as number[] || [];
+    const skipCh: number[] = String(req.query?.skipCh || "")
+        .split(",")
+        .filter(value => value.trim() !== "")
+        .map(value => Number(value.trim()))
+        .filter(value => Number.isInteger(value));
 
     // Parse channel configuration options
     const channelOptions: ChannelScanOption = {
@@ -911,11 +942,10 @@ export const put: Operation = async (req, res) => {
         endCh: req.query.maxCh ? Number(req.query.maxCh) : undefined,
         startSubCh: req.query.minSubCh ? Number(req.query.minSubCh) : undefined,
         endSubCh: req.query.maxSubCh ? Number(req.query.maxSubCh) : undefined,
-        useSubCh: req.query.useSubCh !== undefined ? Boolean(req.query.useSubCh) : undefined,
+        useSubCh: parseBooleanQuery(req.query.useSubCh),
         channelNameFormat: req.query.channelNameFormat as string,
         scanMode: req.query.scanMode as apid.ChannelScanMode,
-        setDisabledOnAdd: req.query.setDisabledOnAdd !== undefined ?
-            Boolean(req.query.setDisabledOnAdd) : undefined
+        setDisabledOnAdd: parseBooleanQuery(req.query.setDisabledOnAdd)
     };
 
     // Generate scan configuration

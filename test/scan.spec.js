@@ -15,6 +15,17 @@ describe("[scan.spec] /api/config/channel/scan : generateScanConfig", () => {
         });
     });
 
+    it("NW1: uses the GR channel space", () => {
+        const config = scan.generateScanConfig({
+            type: "NW1"
+        });
+        assert.deepStrictEqual(config, {
+            channels: Array.from({ length: 50 }, (_, i) => String(i + 13)),
+            scanMode: "Channel",
+            setDisabledOnAdd: false
+        });
+    });
+
     it("GR: startCh only", () => {
         const config = scan.generateScanConfig({
             type: "GR",
