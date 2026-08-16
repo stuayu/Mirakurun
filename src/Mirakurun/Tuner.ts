@@ -257,41 +257,64 @@ export class Tuner {
             };
             let services: apid.Service[] = null;
 
-            setTimeout(() => tsFilter.close(), getServiceScanTimeout(channel));
+            let settled = false;
+            let timeout: NodeJS.Timeout;
 
-            Promise.all<void>([
-                new Promise((resolve, reject) => {
-                    tsFilter.once("network", _network => {
-                        network = _network;
-                        resolve();
-                    });
-                }),
-                new Promise((resolve, reject) => {
-                    tsFilter.once("services", _services => {
-                        services = _services;
-                        resolve();
-                    });
-                })
-            ]).then(() => tsFilter.close());
+            const onNetwork = (_network: typeof network): void => {
+                network = _network;
+                finishIfReady();
+            };
 
-            tsFilter.once("close", () => {
-                tsFilter.removeAllListeners("network");
-                tsFilter.removeAllListeners("services");
+            const onServices = (_services: apid.Service[]): void => {
+                // EDCB keeps waiting after an empty service-list notification.
+                // A tuner can emit SDT before channel switching has completed.
+                if (_services.length > 0) {
+                    services = _services;
+                    finishIfReady();
+                }
+            };
+
+            const cleanup = (): void => {
+                clearTimeout(timeout);
+                tsFilter.removeListener("network", onNetwork);
+                tsFilter.removeListener("services", onServices);
+                tsFilter.removeListener("close", onClose);
+            };
+
+            const onClose = (): void => {
+                if (settled) {
+                    return;
+                }
+                settled = true;
+                cleanup();
 
                 if (network.networkId === -1) {
                     reject(new Error("stream has closed before get network"));
-                } else if (services === null) {
-                    reject(new Error("stream has closed before get services"));
                 } else {
-                    if (network.remoteControlKeyId !== -1) {
-                        services.forEach(service => {
-                            service.remoteControlKeyId = network.remoteControlKeyId;
-                        });
-                    }
-
-                    resolve(services);
+                    reject(new Error("stream has closed before get services"));
                 }
-            });
+            };
+
+            const finishIfReady = (): void => {
+                if (settled || network.networkId === -1 || services === null || services.length === 0) {
+                    return;
+                }
+
+                settled = true;
+                cleanup();
+                if (network.remoteControlKeyId !== -1) {
+                    services.forEach(service => {
+                        service.remoteControlKeyId = network.remoteControlKeyId;
+                    });
+                }
+                tsFilter.close();
+                resolve(services);
+            };
+
+            tsFilter.on("network", onNetwork);
+            tsFilter.on("services", onServices);
+            tsFilter.once("close", onClose);
+            timeout = setTimeout(() => tsFilter.close(), getServiceScanTimeout(channel));
         });
     }
 

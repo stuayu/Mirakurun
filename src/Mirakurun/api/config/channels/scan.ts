@@ -238,15 +238,19 @@ export function generateScanConfig(option: ChannelScanOption): ScanConfig | unde
         };
     }
 
-    // Network tuners use the same numeric terrestrial channel space as GR.
+    // Network tuners use a zero-based numeric channel space.
     if (/^NW(?:[1-9]|[1-3][0-9]|40)$/.test(option.type)) {
         const nwOptions = {
-            startCh: 13,
-            endCh: 62,
+            ...option,
+            startCh: Number.isInteger(option.startCh) && option.startCh >= 0 ? option.startCh : 0,
+            endCh: Number.isInteger(option.endCh) && option.endCh >= 0 ? option.endCh : 62,
             scanMode: "Channel" as const,
-            setDisabledOnAdd: false,
-            ...option
+            setDisabledOnAdd: option.setDisabledOnAdd === true
         };
+
+        if (nwOptions.endCh < nwOptions.startCh) {
+            return undefined;
+        }
 
         const channelFormat = nwOptions.channelNameFormat || CHANNEL_NAME_FORMAT_GR;
         return {
@@ -926,10 +930,10 @@ export const put: Operation = async (req, res) => {
     scanStatus.isScanning = true;
 
     // Extract query parameters
-    const asyncMode = Boolean(req.query.async);
-    const dryRun = Boolean(req.query.dryRun);
+    const asyncMode = parseBooleanQuery(req.query.async) === true;
+    const dryRun = parseBooleanQuery(req.query.dryRun) === true;
     const type = req.query.type as apid.ChannelType;
-    const refresh = Boolean(req.query.refresh);
+    const refresh = parseBooleanQuery(req.query.refresh) === true;
 
     // Parse skipCh parameter
     const skipCh: number[] = String(req.query?.skipCh || "")
@@ -955,9 +959,9 @@ export const put: Operation = async (req, res) => {
     const scanConfig = generateScanConfig(channelOptions);
 
     // Handle missing scan configuration
-    if (!scanConfig) {
+    if (!scanConfig || scanConfig.channels.length === 0) {
         scanStatus.isScanning = false;
-        api.responseError(res, 400, "Invalid scan configuration");
+        api.responseError(res, 400, "Invalid scan configuration: no channels to scan");
         return;
     }
 

@@ -742,6 +742,12 @@ export const ChannelsConfigView: React.FC = () => {
                                             setScanMinCh("2");
                                             setScanMaxCh("24");
                                             break;
+                                        default:
+                                            if (newType.startsWith("NW")) {
+                                                setScanMinCh("0");
+                                                setScanMaxCh("62");
+                                            }
+                                            break;
                                     }
                                 }}
                                 options={[

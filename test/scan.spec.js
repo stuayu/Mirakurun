@@ -15,15 +15,23 @@ describe("[scan.spec] /api/config/channel/scan : generateScanConfig", () => {
         });
     });
 
-    it("NW1: uses the GR channel space", () => {
+    it("NW1: uses the network channel space", () => {
         const config = scan.generateScanConfig({
             type: "NW1"
         });
         assert.deepStrictEqual(config, {
-            channels: Array.from({ length: 50 }, (_, i) => String(i + 13)),
+            channels: Array.from({ length: 63 }, (_, i) => String(i)),
             scanMode: "Channel",
             setDisabledOnAdd: false
         });
+    });
+
+    it("NW1: rejects an inverted channel range", () => {
+        assert.strictEqual(scan.generateScanConfig({
+            type: "NW1",
+            startCh: 10,
+            endCh: 9
+        }), undefined);
     });
 
     it("GR: startCh only", () => {
