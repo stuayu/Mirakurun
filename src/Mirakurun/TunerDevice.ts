@@ -346,7 +346,16 @@ export default class TunerDevice extends EventEmitter {
                 this._index, code, signal, this._process.pid
             );
 
-            reportProcessFailure();
+            // A command can exit with a non-zero code when the requested
+            // channel cannot be tuned (for example, BonRecTest returns
+            // 0xffffffff for "Could not set channel"). Do not respawn that
+            // request or fault the whole tuner; release it after ending the
+            // failed stream instead.
+            if (code !== 0 && signal === null) {
+                this._closing = true;
+            } else if (signal !== null) {
+                reportProcessFailure();
+            }
             this._end();
             setTimeout(this._release.bind(this), this._config.dvbDevicePath ? 1000 : 100);
         });
