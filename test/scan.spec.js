@@ -566,6 +566,20 @@ describe("[scan.spec] /api/config/channel/scan : generateScanConfig", () => {
         });
     });
 
+    it("BS4K: zero-based tuner indexes without subchannels", () => {
+        const config = scan.generateScanConfig({
+            type: "BS4K",
+            startCh: 0,
+            endCh: 2,
+            useSubCh: false
+        });
+        assert.deepStrictEqual(config, {
+            channels: ["0", "1", "2"],
+            scanMode: "Service",
+            setDisabledOnAdd: true
+        });
+    });
+
     it("CS4K: Type only", () => {
         const config = scan.generateScanConfig({
             type: "CS4K"
@@ -1736,5 +1750,17 @@ describe("[scan.spec] /api/config/channel/scan : generateChannelItems", () => {
             isDisabled: setDisabledOnAdd
         });
         assert.strictEqual("serviceId" in channelItems[0], false);
+    });
+
+    it("preserves tuner command variables in generated scan results", () => {
+        const channelItems = scan.generateChannelItems(
+            "Service",
+            "GR",
+            "0",
+            [{ name: "XXXテレビ", serviceId: 1 }],
+            false,
+            { space: 2 }
+        );
+        assert.deepStrictEqual(channelItems[0].commandVars, { space: 2 });
     });
 });

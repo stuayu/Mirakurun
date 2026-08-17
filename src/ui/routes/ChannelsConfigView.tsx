@@ -46,6 +46,14 @@ const typesIndex = ["GR", "BS", "CS", "SKY", "NW1", "NW2", "NW3", "NW4", "NW5", 
     "NW21", "NW22", "NW23", "NW24", "NW25", "NW26", "NW27", "NW28", "NW29", "NW30",
     "NW31", "NW32", "NW33", "NW34", "NW35", "NW36", "NW37", "NW38", "NW39", "NW40"];
 
+const scanStatusLabels: Record<ChannelScanStatus["status"], string> = {
+    not_started: "未開始 / Not started",
+    scanning: "スキャン中 / Scanning",
+    completed: "完了 / Completed",
+    cancelled: "キャンセル済み / Cancelled",
+    error: "エラー / Error"
+};
+
 function sortTypes(types: ChannelType[]): ChannelType[] {
     return types.sort((a, b) => typesIndex.indexOf(a) - typesIndex.indexOf(b));
 }
@@ -74,6 +82,48 @@ function expandChannelRanges(input: string): string {
     }
 
     return [...new Set(result)].sort((a, b) => a - b).join(",");
+}
+
+interface ScanDefaults {
+    minCh: string;
+    maxCh: string;
+    space: string;
+    useSubCh: boolean;
+}
+
+function getScanDefaults(type: ChannelType, channels: ConfigChannels, isWindows: boolean): ScanDefaults {
+    const defaults: ScanDefaults = type === "GR" ?
+        { minCh: "13", maxCh: "62", space: "", useSubCh: true } :
+        type === "BS" || type === "BS4K" ?
+            { minCh: "1", maxCh: "23", space: "", useSubCh: true } :
+            type === "CS" || type === "CS4K" ?
+                { minCh: "2", maxCh: "24", space: "", useSubCh: true } :
+                { minCh: "0", maxCh: "62", space: "", useSubCh: false };
+
+    if (!isWindows) {
+        return defaults;
+    }
+
+    const windowsFallbacks: Partial<Record<ChannelType, [number, number, number]>> = {
+        GR: [0, 49, 0],
+        BS: [0, 28, 0],
+        CS: [0, 11, 1],
+        BS4K: [0, 91, 0],
+        CS4K: [0, 22, 0]
+    };
+    const fallback = windowsFallbacks[type] || [0, 62, 0];
+    const configured = channels.filter(channel => channel.type === type && /^\d+$/.test(channel.channel));
+    const configuredIndexes = configured.map(channel => Number(channel.channel));
+    const configuredSpace = configured
+        .map(channel => channel.commandVars?.space ?? channel.space)
+        .find(value => typeof value === "number");
+
+    return {
+        minCh: String(configuredIndexes.length > 0 ? Math.min(...configuredIndexes) : fallback[0]),
+        maxCh: String(configuredIndexes.length > 0 ? Math.max(...configuredIndexes) : fallback[1]),
+        space: String(configuredSpace ?? fallback[2]),
+        useSubCh: false
+    };
 }
 
 const migrateChannels = (channels: ConfigChannels): ConfigChannels => {
@@ -115,6 +165,7 @@ export const ChannelsConfigView: React.FC = () => {
     const [scanType, setScanType] = useState<ChannelType>("GR");
     const [scanMinCh, setScanMinCh] = useState("13");
     const [scanMaxCh, setScanMaxCh] = useState("62");
+    const [scanSpace, setScanSpace] = useState("");
     const [scanSkipCh, setScanSkipCh] = useState("");
     const [scanMinSubCh, setScanMinSubCh] = useState("0");
     const [scanMaxSubCh, setScanMaxSubCh] = useState("3");
@@ -127,8 +178,26 @@ export const ChannelsConfigView: React.FC = () => {
     const [scanStatus, setScanStatus] = useState<ChannelScanStatus | null>(null);
     const [scanInProgress, setScanInProgress] = useState(false);
     const [showScanResultDialog, setShowScanResultDialog] = useState(false);
+    const [scanError, setScanError] = useState("");
+    const [serverPlatform, setServerPlatform] = useState(state.status?.process?.platform);
 
     ui.setTitle("チャンネル設定", isLoading);
+
+    useEffect(() => {
+        const onStatus = () => setServerPlatform(state.status?.process?.platform);
+        state.on("status", onStatus);
+        return () => {
+            state.off("status", onStatus);
+        };
+    }, []);
+
+    const applyScanDefaults = (type: ChannelType) => {
+        const defaults = getScanDefaults(type, editing || [], serverPlatform === "win32");
+        setScanMinCh(defaults.minCh);
+        setScanMaxCh(defaults.maxCh);
+        setScanSpace(defaults.space);
+        setScanUseSubCh(defaults.useSubCh);
+    };
 
     // スキャンステータスを取得する
     const fetchScanStatus = async () => {
@@ -151,10 +220,14 @@ export const ChannelsConfigView: React.FC = () => {
     // スキャンを開始する
     const startScan = async () => {
         try {
+            setScanError("");
             const params = new URLSearchParams();
             params.append("type", scanType);
             params.append("minCh", scanMinCh);
             params.append("maxCh", scanMaxCh);
+            if (scanSpace.trim() !== "") {
+                params.append("space", scanSpace.trim());
+            }
 
             if (scanSkipCh.trim()) {
                 const expandedSkipCh = expandChannelRanges(scanSkipCh.trim());
@@ -164,9 +237,9 @@ export const ChannelsConfigView: React.FC = () => {
             if ((scanType === "BS" || scanType === "BS4K") && scanUseSubCh) {
                 params.append("minSubCh", scanMinSubCh);
                 params.append("maxSubCh", scanMaxSubCh);
-                if (scanType === "BS") {
-                    params.append("useSubCh", "true");
-                }
+                params.append("useSubCh", "true");
+            } else if (scanType === "BS" || scanType === "BS4K") {
+                params.append("useSubCh", "false");
             }
 
             if (!scanAutoApply) {
@@ -198,9 +271,11 @@ export const ChannelsConfigView: React.FC = () => {
                 await fetchScanStatus();
             } else {
                 console.error("Failed to start scan:", result);
+                setScanError(result.reason || result.message || `スキャンを開始できませんでした (${response.status})`);
             }
         } catch (e) {
             console.error("Error starting scan:", e);
+            setScanError(`スキャンを開始できませんでした: ${String(e)}`);
         }
     };
 
@@ -434,15 +509,19 @@ export const ChannelsConfigView: React.FC = () => {
                     minimal
                     intent="success"
                     icon="add"
-                    text="Add Channel"
+                    text="チャンネルを追加 / Add Channel"
                     onClick={handleAddChannel}
                 />
                 <Button
                     minimal
                     intent="warning"
                     icon="search"
-                    text="Channel Scan"
-                    onClick={() => setShowScanDialog(true)}
+                    text="チャンネルスキャン / Channel Scan"
+                    onClick={() => {
+                        applyScanDefaults(scanType);
+                        setScanError("");
+                        setShowScanDialog(true);
+                    }}
                     disabled={scanInProgress}
                 />
 
@@ -452,14 +531,14 @@ export const ChannelsConfigView: React.FC = () => {
                     minimal
                     intent="danger"
                     icon="undo"
-                    text="Cancel"
+                    text="変更を取り消す / Cancel"
                     disabled={!hasChanges}
                     onClick={handleCancel}
                 />
                 <Button
                     intent="primary"
                     icon="saved"
-                    text="Save"
+                    text="保存 / Save"
                     disabled={!hasChanges}
                     onClick={() => setShowSaveDialog(true)}
                 />
@@ -487,17 +566,17 @@ export const ChannelsConfigView: React.FC = () => {
             <div className="content">
                 {/* スキャン進行中/完了時のステータス表示 */}
                 {scanInProgress && scanStatus && (
-                    <Callout intent="primary" title={`チャンネルスキャン中 (${scanStatus.type})`}>
+                    <Callout intent="primary" title={`チャンネルスキャン中 / Scanning (${scanStatus.type})`}>
                         <div style={{ display: "flex", flexDirection: "column", gap: "8px", marginTop: "8px" }}>
                             <ProgressBar value={(scanStatus.progress || 0) / 100} />
                             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                                 <div>
-                                    現在のチャンネル: <strong>{scanStatus.currentChannel || "初期化中..."}</strong> (進捗: {scanStatus.progress || 0}%)
-                                    <span style={{ marginLeft: "16px" }}>新規: {scanStatus.newCount || 0} / 引き継ぎ: {scanStatus.takeoverCount || 0}</span>
+                                    現在のチャンネル / Current: <strong>{scanStatus.currentChannel || "初期化中 / Initializing..."}</strong> (進捗 / Progress: {scanStatus.progress || 0}%)
+                                    <span style={{ marginLeft: "16px" }}>新規 / New: {scanStatus.newCount || 0} / 引き継ぎ / Existing: {scanStatus.takeoverCount || 0}</span>
                                 </div>
                                 <div style={{ display: "flex", gap: "8px" }}>
-                                    <Button small icon="refresh" onClick={fetchScanStatus}>更新</Button>
-                                    <Button small intent="danger" icon="stop" onClick={stopScan}>スキャン停止</Button>
+                                    <Button small icon="refresh" onClick={fetchScanStatus}>更新 / Refresh</Button>
+                                    <Button small intent="danger" icon="stop" onClick={stopScan}>停止 / Stop</Button>
                                 </div>
                             </div>
                         </div>
@@ -507,18 +586,18 @@ export const ChannelsConfigView: React.FC = () => {
                 {!scanInProgress && scanStatus && (scanStatus.status === "completed" || (scanStatus.scanLog && scanStatus.scanLog.length > 0)) && (
                     <Callout
                         intent={scanStatus.status === "completed" ? "success" : "warning"}
-                        title={`前回のスキャン結果 (${scanStatus.type})`}
+                        title={`前回のスキャン結果 / Last Scan (${scanStatus.type})`}
                     >
                         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "8px" }}>
                             <div>
-                                ステータス: <strong>{scanStatus.status}</strong>
-                                <span style={{ marginLeft: "16px" }}>新規: {scanStatus.newCount || 0} / 引き継ぎ: {scanStatus.takeoverCount || 0}</span>
+                                ステータス / Status: <strong>{scanStatusLabels[scanStatus.status]}</strong>
+                                <span style={{ marginLeft: "16px" }}>新規 / New: {scanStatus.newCount || 0} / 引き継ぎ / Existing: {scanStatus.takeoverCount || 0}</span>
                             </div>
                             <div style={{ display: "flex", gap: "8px" }}>
                                 {scanStatus.status === "completed" && scanStatus.result && (
-                                    <Button small intent="success" icon="tick" onClick={applyScanResult}>スキャン結果を適用</Button>
+                                    <Button small intent="success" icon="tick" onClick={applyScanResult}>結果を適用 / Apply</Button>
                                 )}
-                                <Button small icon="document" onClick={() => setShowScanResultDialog(true)}>ログを表示</Button>
+                                <Button small icon="document" onClick={() => setShowScanResultDialog(true)}>ログを表示 / Show Log</Button>
                             </div>
                         </div>
                     </Callout>
@@ -527,11 +606,11 @@ export const ChannelsConfigView: React.FC = () => {
                 <HTMLTable className="channels-table" striped interactive>
                     <thead>
                         <tr>
-                            <th style={{ width: "80px" }}>Enable</th>
-                            <th style={{ width: "160px" }}>Name</th>
-                            <th style={{ width: "100px" }}>Type</th>
-                            <th style={{ width: "120px" }}>Channel</th>
-                            <th>Options</th>
+                            <th style={{ width: "80px" }}>有効 / Enable</th>
+                            <th style={{ width: "160px" }}>名前 / Name</th>
+                            <th style={{ width: "100px" }}>種別 / Type</th>
+                            <th style={{ width: "120px" }}>チャンネル / Channel</th>
+                            <th>オプション / Options</th>
                             <th style={{ width: "140px", textAlign: "right" }}></th>
                         </tr>
                     </thead>
@@ -591,7 +670,7 @@ export const ChannelsConfigView: React.FC = () => {
                                 </td>
                                 <td>
                                     <div className="channel-options-grid">
-                                        <FormGroup label="Service ID" style={{ width: "90px", marginBottom: 0 }}>
+                                        <FormGroup label="サービスID / Service ID" style={{ width: "120px", marginBottom: 0 }}>
                                             <InputGroup
                                                 placeholder="SID"
                                                 value={`${ch.serviceId || ""}`}
@@ -609,7 +688,7 @@ export const ChannelsConfigView: React.FC = () => {
                                             />
                                         </FormGroup>
 
-                                        <FormGroup label="TsmfRelTs" style={{ width: "90px", marginBottom: 0 }}>
+                                        <FormGroup label="TSMF相対TS / Relative TS" style={{ width: "140px", marginBottom: 0 }}>
                                             <InputGroup
                                                 placeholder="TsmfRelTs"
                                                 value={`${ch.tsmfRelTs || ""}`}
@@ -626,7 +705,7 @@ export const ChannelsConfigView: React.FC = () => {
                                         </FormGroup>
 
                                         <div className="cmd-vars-container">
-                                            <div className="cmd-vars-title">Command Vars</div>
+                                            <div className="cmd-vars-title">コマンド変数 / Command Vars</div>
                                             <div className="cmd-vars-list">
                                                 {ch.commandVars && Object.entries(ch.commandVars).map(([key, value]) => (
                                                     <div key={key} className="cmd-var-pair">
@@ -657,7 +736,7 @@ export const ChannelsConfigView: React.FC = () => {
                                                     minimal
                                                     intent="primary"
                                                     icon="plus"
-                                                    text="Add Var"
+                                                    text="変数を追加 / Add Var"
                                                     onClick={() => addCommandVar(i)}
                                                 />
                                             </div>
@@ -696,7 +775,7 @@ export const ChannelsConfigView: React.FC = () => {
             <Dialog
                 isOpen={showSaveDialog}
                 onClose={() => setShowSaveDialog(false)}
-                title="Save"
+                title="設定の保存 / Save"
             >
                 <DialogBody>
                     <p>設定を保存しますか？</p>
@@ -705,13 +784,13 @@ export const ChannelsConfigView: React.FC = () => {
                 <DialogFooter
                     actions={
                         <>
-                            <Button onClick={() => setShowSaveDialog(false)}>キャンセル</Button>
+                            <Button onClick={() => setShowSaveDialog(false)}>キャンセル / Cancel</Button>
                             <Button
                                 intent="primary"
                                 disabled={!hasChanges}
                                 onClick={handleSave}
                             >
-                                保存
+                                保存 / Save
                             </Button>
                         </>
                     }
@@ -722,47 +801,18 @@ export const ChannelsConfigView: React.FC = () => {
             <Dialog
                 isOpen={showScanDialog}
                 onClose={() => setShowScanDialog(false)}
-                title="Channel Scan"
+                title="チャンネルスキャン / Channel Scan"
                 style={{ width: "450px" }}
             >
                 <DialogBody>
                     <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
-                        <FormGroup label="Channel Type">
+                        <FormGroup label="チャンネル種別 / Channel Type">
                             <HTMLSelect
                                 value={scanType}
                                 onChange={(e) => {
                                     const newType = e.target.value as ChannelType;
                                     setScanType(newType);
-                                    switch (newType) {
-                                        case "GR":
-                                            setScanMinCh("13");
-                                            setScanMaxCh("62");
-                                            break;
-                                        case "BS":
-                                            setScanMinCh("1");
-                                            setScanMaxCh("23");
-                                            break;
-                                        case "BS4K":
-                                            setScanMinCh("1");
-                                            setScanMaxCh("23");
-                                            setScanMinSubCh("0");
-                                            setScanMaxSubCh("3");
-                                            break;
-                                        case "CS":
-                                            setScanMinCh("2");
-                                            setScanMaxCh("24");
-                                            break;
-                                        case "CS4K":
-                                            setScanMinCh("2");
-                                            setScanMaxCh("24");
-                                            break;
-                                        default:
-                                            if (newType.startsWith("NW")) {
-                                                setScanMinCh("0");
-                                                setScanMaxCh("62");
-                                            }
-                                            break;
-                                    }
+                                    applyScanDefaults(newType);
                                 }}
                                 options={[
                                     { value: "GR", label: "GR" },
@@ -775,15 +825,28 @@ export const ChannelsConfigView: React.FC = () => {
                             />
                         </FormGroup>
 
+                        {serverPlatform === "win32" && (
+                            <Callout intent="primary" icon="desktop">
+                                <div>Windows用のチャンネルインデックス範囲です。既存設定がある場合は、その範囲とSpaceを初期値にしています。</div>
+                                <div>Windows channel indexes are used. Existing channel ranges and Space values are used as defaults when available.</div>
+                            </Callout>
+                        )}
+
                         <div style={{ display: "flex", gap: "16px" }}>
-                            <FormGroup label="Min Channel" style={{ flex: 1 }}>
+                            <FormGroup label="開始チャンネル / Min" style={{ flex: 1 }}>
                                 <InputGroup
+                                    type="number"
+                                    min={0}
+                                    step={1}
                                     value={scanMinCh}
                                     onChange={(e) => setScanMinCh(e.target.value)}
                                 />
                             </FormGroup>
-                            <FormGroup label="Max Channel" style={{ flex: 1 }}>
+                            <FormGroup label="終了チャンネル / Max" style={{ flex: 1 }}>
                                 <InputGroup
+                                    type="number"
+                                    min={0}
+                                    step={1}
                                     value={scanMaxCh}
                                     onChange={(e) => setScanMaxCh(e.target.value)}
                                 />
@@ -791,11 +854,30 @@ export const ChannelsConfigView: React.FC = () => {
                         </div>
 
                         <FormGroup
-                            label="Skip Channels (comma separated integers)"
-                            helperText="Enter channel numbers to skip. Range notation (e.g. 14-16) is supported."
+                            label="チューナーSpace / Tuner Space"
+                            helperText="BonDriverのSpaceインデックスです。未指定時は0を使用します。 / BonDriver Space index. Defaults to 0 when omitted."
                         >
                             <InputGroup
-                                placeholder="Example: 13,14-16,18"
+                                type="number"
+                                min={0}
+                                step={1}
+                                placeholder="例 / Example: 0"
+                                value={scanSpace}
+                                onChange={(e) => setScanSpace(e.target.value)}
+                            />
+                        </FormGroup>
+
+                        <Callout intent="warning" icon="warning-sign" title="チャンネル種別とSpaceの組み合わせ / Channel Type and Space">
+                            <div>1回のスキャンは、1つのチャンネル種別と1つのチューナーSpaceの組み合わせを前提とします。Spaceが異なるチャンネルは、NW1・NW2など別の種別に分けてください。同じ種別を複数のSpaceで使用すると、別Spaceの設定が結果から除外される場合があります。</div>
+                            <div>Each scan targets one Channel Type and one Tuner Space. Use separate types such as NW1 and NW2 for different spaces. Multiple spaces under the same type may exclude the other spaces from the result.</div>
+                        </Callout>
+
+                        <FormGroup
+                            label="スキップするチャンネル / Skip Channels"
+                            helperText="カンマ区切りで指定します。範囲指定（例: 14-16）も使用できます。 / Use commas; ranges such as 14-16 are supported."
+                        >
+                            <InputGroup
+                                placeholder="例 / Example: 13,14-16,18"
                                 value={scanSkipCh}
                                 onChange={(e) => {
                                     const val = e.target.value;
@@ -809,19 +891,19 @@ export const ChannelsConfigView: React.FC = () => {
                         {(scanType === "BS" || scanType === "BS4K") && (
                             <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
                                 <Switch
-                                    label={`Use Subchannel Style (${scanType}01_0)`}
+                                    label={`サブチャンネル形式を使用 / Use Subchannel Style (${scanType}01_0)`}
                                     checked={scanUseSubCh}
                                     onChange={(e) => setScanUseSubCh(e.currentTarget.checked)}
                                 />
                                 {scanUseSubCh && (
                                     <div style={{ display: "flex", gap: "16px" }}>
-                                        <FormGroup label="Min Subchannel" style={{ flex: 1 }}>
+                                        <FormGroup label="開始サブチャンネル / Min" style={{ flex: 1 }}>
                                             <InputGroup
                                                 value={scanMinSubCh}
                                                 onChange={(e) => setScanMinSubCh(e.target.value)}
                                             />
                                         </FormGroup>
-                                        <FormGroup label="Max Subchannel" style={{ flex: 1 }}>
+                                        <FormGroup label="終了サブチャンネル / Max" style={{ flex: 1 }}>
                                             <InputGroup
                                                 value={scanMaxSubCh}
                                                 onChange={(e) => setScanMaxSubCh(e.target.value)}
@@ -833,18 +915,18 @@ export const ChannelsConfigView: React.FC = () => {
                         )}
 
                         <Switch
-                            label="Use Channel Name Format"
+                            label="チャンネル名の書式を指定 / Use Name Format"
                             checked={scanChannelNameFormatEnabled}
                             onChange={(e) => setScanChannelNameFormatEnabled(e.currentTarget.checked)}
                         />
 
                         {scanChannelNameFormatEnabled && (
                             <FormGroup
-                                label="Channel Name Format"
-                                helperText="Format to use for channel names. Supports placeholders like {ch}, {ch00}, {subch}."
+                                label="チャンネル名の書式 / Channel Name Format"
+                                helperText="{ch}、{ch00}、{subch}を使用できます。 / Supports {ch}, {ch00}, and {subch}."
                             >
                                 <InputGroup
-                                    placeholder="Example: {ch}, BS{ch00}_{subch}"
+                                    placeholder="例 / Example: {ch}, BS{ch00}_{subch}"
                                     value={scanChannelNameFormat}
                                     onChange={(e) => setScanChannelNameFormat(e.target.value)}
                                 />
@@ -852,29 +934,31 @@ export const ChannelsConfigView: React.FC = () => {
                         )}
 
                         <Switch
-                            label="Auto Apply Results (Restart required)"
+                            label="結果を自動適用 / Auto Apply（再起動が必要 / Restart required）"
                             checked={scanAutoApply}
                             onChange={(e) => setScanAutoApply(e.currentTarget.checked)}
                         />
 
                         <Switch
-                            label="Set Disabled on Add"
+                            label="追加したチャンネルを無効にする / Disable New Channels"
                             checked={scanSetDisabledOnAdd}
                             onChange={(e) => setScanSetDisabledOnAdd(e.currentTarget.checked)}
                         />
 
                         <Switch
-                            label="Refresh (Update existing channels)"
+                            label="既存チャンネルを再スキャン / Refresh Existing Channels"
                             checked={scanRefresh}
                             onChange={(e) => setScanRefresh(e.currentTarget.checked)}
                         />
+
+                        {scanError && <Callout intent="danger">{scanError}</Callout>}
                     </div>
                 </DialogBody>
                 <DialogFooter
                     actions={
                         <>
-                            <Button onClick={() => setShowScanDialog(false)}>Cancel</Button>
-                            <Button intent="primary" onClick={startScan}>Start Scan</Button>
+                            <Button onClick={() => setShowScanDialog(false)}>キャンセル / Cancel</Button>
+                            <Button intent="primary" onClick={startScan}>スキャン開始 / Start Scan</Button>
                         </>
                     }
                 />
@@ -884,16 +968,16 @@ export const ChannelsConfigView: React.FC = () => {
             <Dialog
                 isOpen={showScanResultDialog}
                 onClose={() => setShowScanResultDialog(false)}
-                title="Scan Results"
+                title="スキャン結果 / Scan Results"
                 style={{ width: "600px" }}
             >
                 <DialogBody>
                     {scanStatus && (
                         <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
                             {scanStatus.status === "completed" && (
-                                <Callout intent="success" title="スキャン完了">
-                                    スキャンが正常に完了しました！
-                                    <div>新規: {scanStatus.newCount} | 引き継ぎ: {scanStatus.takeoverCount}</div>
+                                <Callout intent="success" title="スキャン完了 / Scan Completed">
+                                    スキャンが正常に完了しました。 / The scan completed successfully.
+                                    <div>新規 / New: {scanStatus.newCount} | 引き継ぎ / Existing: {scanStatus.takeoverCount}</div>
                                 </Callout>
                             )}
 
@@ -910,13 +994,13 @@ export const ChannelsConfigView: React.FC = () => {
                                 {scanStatus.scanLog && scanStatus.scanLog.length > 0 ? (
                                     scanStatus.scanLog.join("\n")
                                 ) : (
-                                    <div>ログがありません。</div>
+                                    <div>ログがありません。 / No logs available.</div>
                                 )}
                             </div>
 
                             {scanStatus.status === "completed" && scanStatus.result && (
                                 <Callout intent="primary">
-                                    「適用」ボタンをクリックすると、現在のスキャン結果を設定に反映します。
+                                    「適用」を押すと、現在のスキャン結果を設定へ反映します。 / Select Apply to copy the scan results into the configuration.
                                 </Callout>
                             )}
                         </div>
@@ -925,13 +1009,13 @@ export const ChannelsConfigView: React.FC = () => {
                 <DialogFooter
                     actions={
                         <>
-                            <Button onClick={() => setShowScanResultDialog(false)}>閉じる</Button>
+                            <Button onClick={() => setShowScanResultDialog(false)}>閉じる / Close</Button>
                             <Button
                                 intent="primary"
                                 onClick={applyScanResult}
                                 disabled={scanStatus?.status !== "completed" || !scanStatus?.result}
                             >
-                                スキャン結果を適用
+                                スキャン結果を適用 / Apply Results
                             </Button>
                         </>
                     }

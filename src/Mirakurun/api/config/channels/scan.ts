@@ -334,6 +334,23 @@ export function generateScanConfig(option: ChannelScanOption): ScanConfig | unde
     // MMT/TLV は BonDriver 等のフロントエンド側で MPEG-2 TS へ変換される前提のため、
     // チャンネル識別子はチューナーコマンドの空間に依存する。channelNameFormat で上書きできる。
     if (option.type === "BS4K") {
+        // BonDriver-based tuners expose BS4K channels as zero-based indexes in a
+        // tuner space rather than as BSxx_subchannel identifiers.
+        if (satelliteOptions.useSubCh === false) {
+            const bs4kIndexOptions = {
+                startCh: 0,
+                endCh: 91,
+                ...satelliteOptions
+            };
+            const channelFormat = bs4kIndexOptions.channelNameFormat || CHANNEL_NAME_FORMAT_GR;
+            return {
+                channels: range(bs4kIndexOptions.startCh, bs4kIndexOptions.endCh)
+                    .map(ch => formatChannelName(channelFormat, ch)),
+                scanMode: bs4kIndexOptions.scanMode,
+                setDisabledOnAdd: bs4kIndexOptions.setDisabledOnAdd
+            };
+        }
+
         const bs4kOptions = {
             startCh: 1,
             endCh: 23,
@@ -391,7 +408,8 @@ export function generateChannelItemForService(
     type: apid.ChannelType,
     channel: string,
     service: apid.Service,
-    setDisabledOnAdd: boolean
+    setDisabledOnAdd: boolean,
+    commandVars?: Record<string, string | number>
 ): apid.ConfigChannelsItem {
     // Use service name, or fallback to generated name if empty
     let name = service.name.trim();
@@ -404,6 +422,7 @@ export function generateChannelItemForService(
         type,
         channel,
         serviceId: service.serviceId,
+        ...(commandVars ? { commandVars: { ...commandVars } } : {}),
         isDisabled: setDisabledOnAdd
     };
 }
@@ -422,7 +441,8 @@ export function generateChannelItemForChannel(
     type: apid.ChannelType,
     channel: string,
     services: apid.Service[],
-    setDisabledOnAdd: boolean
+    setDisabledOnAdd: boolean,
+    commandVars?: Record<string, string | number>
 ): apid.ConfigChannelsItem {
     // Find the common prefix among all service names
     const baseName = services[0].name;
@@ -460,6 +480,7 @@ export function generateChannelItemForChannel(
         name,
         type,
         channel,
+        ...(commandVars ? { commandVars: { ...commandVars } } : {}),
         isDisabled: setDisabledOnAdd
     };
 }
@@ -479,17 +500,18 @@ export function generateChannelItems(
     type: apid.ChannelType,
     channel: string,
     services: apid.Service[],
-    setDisabledOnAdd: boolean
+    setDisabledOnAdd: boolean,
+    commandVars?: Record<string, string | number>
 ): apid.ConfigChannels {
     // Service mode: create one channel item per service
     if (scanMode === "Service") {
         return services.map(service =>
-            generateChannelItemForService(type, channel, service, setDisabledOnAdd)
+            generateChannelItemForService(type, channel, service, setDisabledOnAdd, commandVars)
         );
     }
 
     // Channel mode: create one channel item for all services
-    return [generateChannelItemForChannel(type, channel, services, setDisabledOnAdd)];
+    return [generateChannelItemForChannel(type, channel, services, setDisabledOnAdd, commandVars)];
 }
 /**
  * Base interface for scan status updates
@@ -552,7 +574,8 @@ async function runChannelScan(
     type: apid.ChannelType,
     refresh: boolean,
     outputWriter?: (text: string) => void,
-    skipCh: number[] = []
+    skipCh: number[] = [],
+    space?: number
 ): Promise<apid.ConfigChannels> {
     try {
         // Initialize scan data
@@ -578,6 +601,11 @@ async function runChannelScan(
             startTime: now,
             updateTime: now
         });
+        if (space !== undefined) {
+            scanStatus.space = space;
+        } else {
+            delete scanStatus.space;
+        }
 
         /**
          * Updates scan phase status
@@ -743,7 +771,8 @@ async function runChannelScan(
                 const channelItem = new ChannelItem({
                     name: `${type}:${channel}`,
                     type,
-                    channel
+                    channel,
+                    ...(space !== undefined ? { commandVars: { space } } : {})
                 });
                 services = await _.tuner.getServices([channelItem], {
                     id: "Mirakurun:API:channelScan",
@@ -793,7 +822,8 @@ async function runChannelScan(
                 type,
                 channel,
                 services,
-                scanConfig.setDisabledOnAdd
+                scanConfig.setDisabledOnAdd,
+                space !== undefined ? { space } : undefined
             );
 
             // Add newly scanned items to results
@@ -900,15 +930,16 @@ export const get: Operation = async (req, res) => {
 
 get.apiDoc = {
     tags: ["config"],
-    summary: "Get Channel Scan Status",
-    description: "Returns the current or last completed scan status and results",
+    summary: "チャンネルスキャン状態の取得 / Get Channel Scan Status",
+    description: "現在実行中、または直近に完了したスキャンの状態と結果を返します。 / " +
+        "Returns the current or last completed scan status and results.",
     operationId: "getChannelScanStatus",
     produces: [
         "application/json"
     ],
     responses: {
         200: {
-            description: "OK",
+            description: "取得成功 / OK",
             schema: {
                 $ref: "#/definitions/ChannelScanStatus"
             }
@@ -934,6 +965,13 @@ export const put: Operation = async (req, res) => {
     const dryRun = parseBooleanQuery(req.query.dryRun) === true;
     const type = req.query.type as apid.ChannelType;
     const refresh = parseBooleanQuery(req.query.refresh) === true;
+    const space = req.query.space !== undefined ? Number(req.query.space) : undefined;
+
+    if (space !== undefined && (!Number.isInteger(space) || space < 0)) {
+        scanStatus.isScanning = false;
+        api.responseError(res, 400, "Invalid tuner space: expected a non-negative integer");
+        return;
+    }
 
     // Parse skipCh parameter
     const skipCh: number[] = String(req.query?.skipCh || "")
@@ -976,7 +1014,7 @@ export const put: Operation = async (req, res) => {
         res.end();
 
         // Run scan in background
-        runChannelScan(scanConfig, dryRun, type, refresh, null, skipCh)
+        runChannelScan(scanConfig, dryRun, type, refresh, null, skipCh, space)
             .catch(error => {
                 console.error("Channel scan error:", error);
                 // Error is used only when the scan is stopped
@@ -1002,7 +1040,7 @@ export const put: Operation = async (req, res) => {
         };
 
         // Run scan with output streaming
-        await runChannelScan(scanConfig, dryRun, type, refresh, logTextOutput, skipCh);
+        await runChannelScan(scanConfig, dryRun, type, refresh, logTextOutput, skipCh, space);
         res.end();
     } catch (error) {
         console.error("Channel scan error:", error);
@@ -1020,12 +1058,28 @@ export const put: Operation = async (req, res) => {
  */
 put.apiDoc = {
     tags: ["config"],
-    summary: "Channel Scan",
-    description: `Entry rewriting specifications:
+    summary: "チャンネルスキャン / Channel Scan",
+    description: `## 日本語
+
+設定の更新仕様:
+- 指定した種別と範囲のチャンネルをスキャンし、検出した項目を設定ファイルへ保存します。
+- \`refresh=false\` の場合、設定済みで有効なチャンネルはスキャンせず、その設定を引き継ぎます。
+- 指定した種別のうちスキャン範囲外にある項目は削除されます。他の種別の項目は保持されます。
+- 1回のスキャンは1つのチャンネル種別と1つの \`space\` の組み合わせを前提とします。Spaceが異なるチャンネルは、NW1・NW2など別の種別へ分けてください。同じ種別を複数Spaceで使用すると、別Spaceの設定が結果から除外される場合があります。
+
+BSサブチャンネル形式:
+- BSスキャンでは \`useSubCh=true\` にすると、\`BS01_0\` のようなサブチャンネル形式を使用できます。
+- 範囲は \`minCh\`、\`maxCh\`、\`minSubCh\`、\`maxSubCh\` で指定します。
+- WindowsのBonDriverなど、0起点のチャンネルインデックスを使う場合は \`useSubCh=false\` にしてください。
+
+## English
+
+Entry rewriting specifications:
 - The scan is performed on a range of channels of the specified type and the entries for those channels, if any, are saved in the configuration file.
 - If the channel to be scanned is described in the configuration file and is enabled, the scan will not be performed for that channel and the entries described will remain intact. If you do not want to keep the entries, use the \`refresh\` option.
 - All entries outside the channel range of the specified type will be deleted.
 - All entries of a type other than the specified type will remain.
+- One scan targets one channel type and one \`space\`. Use separate types such as NW1 and NW2 for channels in different tuner spaces. Using multiple spaces with the same type may exclude the other spaces from the result.
 
 About BS Subchannel Style:
 - Only when scanning BS, you can specify the channel number in the subchannel style (e.g. BS01_0). To specify the channel number, use minSubCh and maxSubCh in addition to minCh and maxCh.
@@ -1046,7 +1100,8 @@ About BS Subchannel Style:
             type: "boolean",
             allowEmptyValue: true,
             default: false,
-            description: "Dry run mode. If `true`, the scanned result will not be saved to configuration."
+            description: "ドライランです。`true` の場合、結果を設定へ保存しません。 / " +
+                "Dry run mode. If `true`, the scanned result will not be saved to configuration."
         },
         {
             in: "query",
@@ -1059,19 +1114,29 @@ About BS Subchannel Style:
                 "NW31", "NW32", "NW33", "NW34", "NW35", "NW36", "NW37", "NW38", "NW39", "NW40",
                 "BS4K", "CS4K"],
             default: "GR",
-            description: "Specifies the channel type to scan."
+            description: "スキャンするチャンネル種別を指定します。 / Specifies the channel type to scan."
         },
         {
             in: "query",
             name: "minCh",
             type: "integer",
-            description: "Specifies the minimum number of channel numbers to scan."
+            description: "スキャン範囲の最小チャンネル番号です。 / Minimum channel number to scan."
+        },
+        {
+            in: "query",
+            name: "space",
+            type: "integer",
+            minimum: 0,
+            description: "チューニングコマンドへ `commandVars.space` として渡すSpaceインデックスです。" +
+                "WindowsのBonDriver系チューナーで主に使用します。 / " +
+                "Tuner space index passed to the tuning command as `commandVars.space`. " +
+                "This is commonly required by BonDriver-based tuners on Windows."
         },
         {
             in: "query",
             name: "maxCh",
             type: "integer",
-            description: "Specifies the maximum number of channel numbers to scan."
+            description: "スキャン範囲の最大チャンネル番号です。 / Maximum channel number to scan."
         },
         {
             in: "query",
@@ -1081,20 +1146,22 @@ About BS Subchannel Style:
                 type: "integer"
             },
             collectionFormat: "csv",
-            description: "Comma-separated list of channel numbers to skip during scanning.\n" +
-                "Example: `skipCh=13,14,15` will skip channels 13, 14, and 15."
+            description: "スキップするチャンネル番号をカンマ区切りで指定します。例: `skipCh=13,14,15` / " +
+                "Comma-separated channel numbers to skip. Example: `skipCh=13,14,15`."
         },
         {
             in: "query",
             name: "minSubCh",
             type: "integer",
-            description: "Specifies the minimum number of subchannel numbers to scan. This parameter is only used if the type is `BS` and the useSubCh is `true`."
+            description: "最小サブチャンネル番号です。`type=BS` かつ `useSubCh=true` の場合のみ使用します。 / " +
+                "Minimum subchannel number. Used only when type is `BS` and useSubCh is `true`."
         },
         {
             in: "query",
             name: "maxSubCh",
             type: "integer",
-            description: "Specifies the maximum number of subchannel numbers to scan. This parameter is only used if the type is `BS` and the useSubCh is `true`."
+            description: "最大サブチャンネル番号です。`type=BS` かつ `useSubCh=true` の場合のみ使用します。 / " +
+                "Maximum subchannel number. Used only when type is `BS` and useSubCh is `true`."
         },
         {
             in: "query",
@@ -1102,32 +1169,36 @@ About BS Subchannel Style:
             type: "boolean",
             allowEmptyValue: true,
             default: true,
-            description: "Specify true to use the subchannel style for channel numbers. Only used for BS scans. (e.g. BS01_0)"
+            description: "サブチャンネル形式を使用する場合は `true` にします（例: BS01_0）。 / " +
+                "Set to `true` to use subchannel-style channel numbers (e.g. BS01_0)."
         },
         {
             in: "query",
             name: "channelNameFormat",
             type: "string",
             allowEmptyValue: true,
-            description: "Override format to use for channel name. Supports placeholders like {ch}, {ch00}, {subch}. (e.g. {ch} -> 1, BS{ch00}_{subch} -> BS01_2)"
+            description: "チャンネル名の書式を上書きします。{ch}、{ch00}、{subch}を使用できます。 / " +
+                "Overrides the channel name format. Supports {ch}, {ch00}, and {subch}."
         },
         {
             in: "query",
             name: "scanMode",
             type: "string",
             enum: ["Channel", "Service"] as apid.ChannelScanMode[],
-            description: "Channel scan mode. Use `Service` mode to create separate entries per service.\n\n" +
-                "_Default value (GR)_: Channel\n" +
-                "_Default value (BS/CS)_: Service"
+            description: "スキャンモードです。`Service` はサービスごとに個別の項目を作成します。 / " +
+                "Scan mode. `Service` creates a separate entry for each service.\n\n" +
+                "_GRの既定値 / Default for GR_: Channel\n" +
+                "_BS/CSの既定値 / Default for BS/CS_: Service"
         },
         {
             in: "query",
             name: "setDisabledOnAdd",
             type: "boolean",
             allowEmptyValue: true,
-            description: "If `true`, newly discovered channels will be added in disabled state.\n\n" +
-                "_Default value (GR)_: false\n" +
-                "_Default value (BS/CS)_: true"
+            description: "`true` の場合、新しく検出したチャンネルを無効状態で追加します。 / " +
+                "If `true`, newly discovered channels are added in disabled state.\n\n" +
+                "_GRの既定値 / Default for GR_: false\n" +
+                "_BS/CSの既定値 / Default for BS/CS_: true"
         },
         {
             in: "query",
@@ -1135,9 +1206,9 @@ About BS Subchannel Style:
             type: "boolean",
             allowEmptyValue: true,
             default: false,
-            description: "If `true`, update the existing channel configurations without preserving them.\n" +
-                "When false, enabled channels that already exist in the config will be preserved.\n" +
-                "Note: Channels of other types will always be preserved regardless of this setting."
+            description: "`true` の場合、既存設定を引き継がず再スキャンします。他の種別は常に保持されます。 / " +
+                "If `true`, rescans without preserving existing channel configurations. " +
+                "Channels of other types are always preserved."
         },
         {
             in: "query",
@@ -1145,20 +1216,22 @@ About BS Subchannel Style:
             type: "boolean",
             allowEmptyValue: true,
             default: false,
-            description: "If `true`, the API returns 202 Accepted immediately and performs scan asynchronously.\n" +
+            description: "`true` の場合、直ちに202を返して非同期でスキャンします。" +
+                "進捗と結果は GET /config/channels/scan で取得します。 / " +
+                "If `true`, returns 202 immediately and scans asynchronously. " +
                 "Use GET /config/channels/scan to monitor progress and retrieve the result."
         }
     ],
     responses: {
         200: {
-            description: "OK - Synchronous scan completed",
+            description: "同期スキャン完了 / OK - Synchronous scan completed",
             schema: {
                 type: "string",
-                description: "Text output of scan process"
+                description: "スキャン処理のテキスト出力 / Text output of the scan process"
             }
         },
         202: {
-            description: "Accepted - Asynchronous scan started",
+            description: "非同期スキャン開始 / Accepted - Asynchronous scan started",
             schema: {
                 type: "object",
                 properties: {
@@ -1173,19 +1246,19 @@ About BS Subchannel Style:
             }
         },
         400: {
-            description: "Invalid scan configuration",
+            description: "スキャン設定が不正 / Invalid scan configuration",
             schema: {
                 $ref: "#/definitions/Error"
             }
         },
         409: {
-            description: "Already Scanning",
+            description: "スキャン実行中 / Already scanning",
             schema: {
                 $ref: "#/definitions/Error"
             }
         },
         default: {
-            description: "Unexpected Error",
+            description: "予期しないエラー / Unexpected error",
             schema: {
                 $ref: "#/definitions/Error"
             }
@@ -1230,15 +1303,15 @@ export const del: Operation = async (req, res) => {
  */
 del.apiDoc = {
     tags: ["config"],
-    summary: "Stop Channel Scan",
-    description: "Stops a currently running channel scan operation",
+    summary: "チャンネルスキャンの停止 / Stop Channel Scan",
+    description: "実行中のチャンネルスキャンを停止します。 / Stops the current channel scan.",
     operationId: "stopChannelScan",
     produces: [
         "application/json"
     ],
     responses: {
         206: {
-            description: "Accepted",
+            description: "停止要求を受理 / Accepted",
             schema: {
                 type: "object",
                 properties: {
@@ -1253,13 +1326,13 @@ del.apiDoc = {
             }
         },
         404: {
-            description: "No scan in progress",
+            description: "実行中のスキャンなし / No scan in progress",
             schema: {
                 $ref: "#/definitions/Error"
             }
         },
         default: {
-            description: "Unexpected Error",
+            description: "予期しないエラー / Unexpected error",
             schema: {
                 $ref: "#/definitions/Error"
             }

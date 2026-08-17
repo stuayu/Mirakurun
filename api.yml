@@ -695,11 +695,11 @@ definitions:
 
   ChannelScanStatus:
     type: object
-    description: "Current status of a channel scan operation"
+    description: "チャンネルスキャンの現在の状態 / Current channel scan status"
     properties:
       status:
         type: string
-        description: "Current scan status"
+        description: "現在のスキャン状態 / Current scan status"
         enum:
           - not_started
           - scanning
@@ -708,33 +708,37 @@ definitions:
           - error
       isScanning:
         type: boolean
-        description: "Whether a scan is currently in progress"
+        description: "スキャンが実行中かどうか / Whether a scan is in progress"
       type:
         $ref: '#/definitions/ChannelType'
-        description: "Channel type being scanned"
+        description: "スキャン対象のチャンネル種別 / Channel type being scanned"
+      space:
+        type: integer
+        minimum: 0
+        description: "スキャンに使用するチューナーSpace / Tuner space index used for the scan"
       dryRun:
         type: boolean
-        description: "Whether this is a dry run (no changes will be saved)"
+        description: "ドライランかどうか（変更を保存しない） / Whether this is a dry run"
       progress:
         type: integer
-        description: "Scan progress percentage (0-100)"
+        description: "スキャン進捗率（0～100） / Scan progress percentage (0-100)"
       currentChannel:
         type: string
-        description: "Channel currently being scanned"
+        description: "現在スキャン中のチャンネル / Channel currently being scanned"
       scanLog:
         type: array
-        description: "Log of scan events"
+        description: "スキャンイベントのログ / Scan event log"
         items:
           type: string
       newCount:
         type: integer
-        description: "Number of new channels found"
+        description: "新しく検出したチャンネル数 / Number of new channels found"
       takeoverCount:
         type: integer
-        description: "Number of existing channels merged"
+        description: "引き継いだ既存チャンネル数 / Number of existing channels merged"
       result:
         type: array
-        description: "Complete channel configuration"
+        description: "スキャン後のチャンネル設定 / Complete channel configuration"
         items:
           $ref: "#/definitions/ConfigChannelsItem"
       startTime:

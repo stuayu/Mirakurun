@@ -355,6 +355,8 @@ export interface ChannelScanStatus {
     isScanning: boolean;
     status: ChannelScanPhase;
     type?: ChannelType;
+    /** Tuner space index used for the scan. */
+    space?: number;
     dryRun?: boolean;
     progress?: number;
     currentChannel?: string;
