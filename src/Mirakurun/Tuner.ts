@@ -106,13 +106,22 @@ export class Tuner {
         }
 
         while (true) {
-            const pickableDevices = devices.filter(device => !this._readyForJobPickedDeviceSet.has(device));
+            // Keep each tuner paired with the channel it represents. Filtering
+            // only the devices shifts the parallel channels array when a
+            // tuner is already reserved, which can make us tune the wrong
+            // channel on shared tuner configurations.
+            const pickableIndices = devices
+                .map((device, index) => ({ device, index }))
+                .filter(item => !this._readyForJobPickedDeviceSet.has(item.device))
+                .map(item => item.index);
+            const pickableDevices = pickableIndices.map(index => devices[index]);
+            const pickableChannels = pickableIndices.map(index => channels[index]);
             if (pickableDevices.length === 0) {
                 log.debug("readyForJob: no pickable tuners for channel type: %s", channels);
                 await common.sleep(1000 * 10);
                 continue;
             }
-            const device = this._pickTunerDevice(pickableDevices, channels, -1);
+            const device = this._pickTunerDevice(pickableDevices, pickableChannels, -1);
             if (device === null) {
                 // log.debug("readyForJob: no available tuners for channel type: %s", channel.type);
                 await common.sleep(1000 * 10);
@@ -120,7 +129,7 @@ export class Tuner {
             }
             // pick したチューナーを少し保持する
             this._readyForJobPickedDeviceSet.add(device[0]);
-            log.debug("readyForJob: picked device: #%d (%s)", device[0].config.name);
+            log.debug("readyForJob: picked device: #%d (%s)", device[0].index, device[0].config.name);
 
             setTimeout(() => {
                 // 開放

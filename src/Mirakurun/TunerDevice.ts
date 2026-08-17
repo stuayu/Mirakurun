@@ -360,8 +360,19 @@ export default class TunerDevice extends EventEmitter {
             setTimeout(this._release.bind(this), this._config.dvbDevicePath ? 1000 : 100);
         });
 
+        let stderrBuffer = "";
         this._process.stderr.on("data", data => {
-            log.debug("TunerDevice#%d > %s", this._index, data.toString().trim());
+            const lines = (stderrBuffer + data.toString()).split(/\r?\n/);
+            stderrBuffer = lines.pop() || "";
+            for (const message of lines.map(line => line.trim()).filter(line => line.length > 0)) {
+                // recisdb prints a progress counter to stderr for every TS
+                // buffer. Logging each line floods the log and can starve
+                // Mirakurun's event loop while the tuner is streaming.
+                if (/^\[[^\]]+\]\s+INFO:\s+\d+\s+remaining\.$/.test(message)) {
+                    continue;
+                }
+                log.debug("TunerDevice#%d > %s", this._index, message);
+            }
         });
 
         // flowing start
