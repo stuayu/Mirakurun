@@ -26,6 +26,7 @@ import Event from "./Event";
 import ChannelItem from "./ChannelItem";
 import TSFilter from "./TSFilter";
 import Client, { ProgramsQuery } from "../client";
+import { consumeTunerStderr, isBonRecTestStartupError } from "./tunerStderr";
 
 // 選局に時間がかかるチューナーでは、プロセスの再起動間隔も長くなるため、
 // 連続異常終了の判定はこの時間内の失敗だけを対象にする。
@@ -64,6 +65,7 @@ export default class TunerDevice extends EventEmitter {
     private _lastProcessFailureAt = 0;
     private _exited = false;
     private _closing = false;
+    private _terminationRequested = false;
 
     constructor(private _index: number, private _config: apid.ConfigTunersItem) {
         super();
@@ -253,6 +255,8 @@ export default class TunerDevice extends EventEmitter {
             throw new Error(util.format("TunerDevice#%d has process", this._index));
         }
 
+        this._terminationRequested = false;
+
         let cmd: string;
 
         if (this._isRemote === true) {
@@ -277,6 +281,7 @@ export default class TunerDevice extends EventEmitter {
         });
 
         const parsed = common.parseCommandForSpawn(cmd);
+        const isBonRecTest = /(?:^|[\\/])BonRecTest(?:\.exe)?$/i.test(parsed.command);
 
         this._process = child_process.spawn(parsed.command, parsed.args);
         this._command = cmd;
@@ -312,8 +317,9 @@ export default class TunerDevice extends EventEmitter {
         this._process.once("exit", () => this._exited = true);
 
         let processFailureReported = false;
+        let bonRecTestStartupFailed = false;
         const reportProcessFailure = (): void => {
-            if (processFailureReported === true || this._closing === true) {
+            if (processFailureReported === true || this._closing === true || this._terminationRequested === true) {
                 return;
             }
 
@@ -346,14 +352,15 @@ export default class TunerDevice extends EventEmitter {
                 this._index, code, signal, this._process.pid
             );
 
-            // A command can exit with a non-zero code when the requested
-            // channel cannot be tuned (for example, BonRecTest returns
-            // 0xffffffff for "Could not set channel"). Do not respawn that
-            // request or fault the whole tuner; release it after ending the
-            // failed stream instead.
-            if (code !== 0 && signal === null) {
+            if (isBonRecTest && (bonRecTestStartupFailed || isBonRecTestStartupError(stderrBuffer))) {
+                // BonRecTest returns -1 after a synchronous startup failure,
+                // such as OpenTuner/SetChannel failure. Retrying the same
+                // process here only creates a respawn loop.
                 this._closing = true;
-            } else if (signal !== null) {
+            } else if (this._closing === false && this._terminationRequested === false) {
+                // Any unexplained exit while users are attached is abnormal,
+                // including exit code 0. Limit automatic respawn to three
+                // consecutive failures through reportProcessFailure().
                 reportProcessFailure();
             }
             this._end();
@@ -362,9 +369,12 @@ export default class TunerDevice extends EventEmitter {
 
         let stderrBuffer = "";
         this._process.stderr.on("data", data => {
-            const lines = (stderrBuffer + data.toString()).split(/\r?\n/);
-            stderrBuffer = lines.pop() || "";
-            for (const message of lines.map(line => line.trim()).filter(line => line.length > 0)) {
+            const parsed = consumeTunerStderr(stderrBuffer, data);
+            stderrBuffer = parsed.remainder;
+            for (const message of parsed.messages) {
+                if (isBonRecTest && isBonRecTestStartupError(message)) {
+                    bonRecTestStartupFailed = true;
+                }
                 // recisdb prints a progress counter to stderr for every TS
                 // buffer. Logging each line floods the log and can starve
                 // Mirakurun's event loop while the tuner is streaming.
@@ -414,6 +424,7 @@ export default class TunerDevice extends EventEmitter {
         }
 
         this._isAvailable = false;
+        this._terminationRequested = true;
         this._closing = close;
 
         this._updated();
@@ -422,10 +433,38 @@ export default class TunerDevice extends EventEmitter {
             this.once("release", resolve);
 
             if (process.platform === "win32") {
-                const timer = setTimeout(() => this._process.kill(), 3000);
-                this._process.once("exit", () => clearTimeout(timer));
+                const tunerProcess = this._process;
+                const forceKill = (): void => {
+                    if (tunerProcess.exitCode !== null || tunerProcess.signalCode !== null) {
+                        return;
+                    }
+                    try {
+                        tunerProcess.kill();
+                    } catch (err) {
+                        log.warn("TunerDevice#%d failed to terminate process (pid=%d): %s", this._index, tunerProcess.pid, err);
+                    }
+                };
+                const timer = setTimeout(forceKill, 3000);
+                const onStdinError = (err: Error): void => {
+                    log.warn("TunerDevice#%d failed to stop process through stdin (pid=%d): %s", this._index, tunerProcess.pid, err);
+                    forceKill();
+                };
+                tunerProcess.stdin.once("error", onStdinError);
+                tunerProcess.once("exit", () => {
+                    clearTimeout(timer);
+                    tunerProcess.stdin.removeListener("error", onStdinError);
+                });
 
-                this._process.stdin.write("\n");
+                if (tunerProcess.stdin.destroyed || tunerProcess.stdin.writable === false) {
+                    forceKill();
+                } else {
+                    try {
+                        // BonRecTest's WaitThread exits after getchar().
+                        tunerProcess.stdin.write("\n");
+                    } catch (err) {
+                        onStdinError(err instanceof Error ? err : new Error(String(err)));
+                    }
+                }
             } else if (/^dvbv5-zap /.test(this._command) === true) {
                 this._process.kill("SIGKILL");
             } else {
@@ -472,6 +511,7 @@ export default class TunerDevice extends EventEmitter {
         }
 
         this._closing = false;
+        this._terminationRequested = false;
         this._exited = false;
 
         this.emit("release");

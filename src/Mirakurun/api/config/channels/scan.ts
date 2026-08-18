@@ -45,6 +45,14 @@ function parseBooleanQuery(value: unknown): boolean | undefined {
 }
 
 /**
+ * Parse an optional numeric query parameter without treating zero as omitted.
+ * express-openapi may already have converted integer parameters to numbers.
+ */
+export function parseOptionalNumberQuery(value: unknown): number | undefined {
+    return value === undefined ? undefined : Number(value);
+}
+
+/**
  * Configuration for a scan operation
  */
 interface ScanConfig {
@@ -64,6 +72,7 @@ interface ScanConfig {
  * 0xC0 = データサービス
  */
 const serviceTypes = [0x01, 0x02, 0xA1, 0xA4, 0xA5, 0xAD, 0xC0];
+export const CHANNEL_SCAN_PRIORITY = -1;
 
 /**
  * Options for string comparison when sorting channels
@@ -776,7 +785,9 @@ async function runChannelScan(
                 });
                 services = await _.tuner.getServices([channelItem], {
                     id: "Mirakurun:API:channelScan",
-                    priority: 1
+                    // A configuration scan must never take over a live view or
+                    // recording. Fail this channel when no tuner is free.
+                    priority: CHANNEL_SCAN_PRIORITY
                 });
             } catch (error) {
                 // Handle errors (often no signal)
@@ -983,10 +994,10 @@ export const put: Operation = async (req, res) => {
     // Parse channel configuration options
     const channelOptions: ChannelScanOption = {
         type,
-        startCh: req.query.minCh ? Number(req.query.minCh) : undefined,
-        endCh: req.query.maxCh ? Number(req.query.maxCh) : undefined,
-        startSubCh: req.query.minSubCh ? Number(req.query.minSubCh) : undefined,
-        endSubCh: req.query.maxSubCh ? Number(req.query.maxSubCh) : undefined,
+        startCh: parseOptionalNumberQuery(req.query.minCh),
+        endCh: parseOptionalNumberQuery(req.query.maxCh),
+        startSubCh: parseOptionalNumberQuery(req.query.minSubCh),
+        endSubCh: parseOptionalNumberQuery(req.query.maxSubCh),
         useSubCh: parseBooleanQuery(req.query.useSubCh),
         channelNameFormat: req.query.channelNameFormat as string,
         scanMode: req.query.scanMode as apid.ChannelScanMode,

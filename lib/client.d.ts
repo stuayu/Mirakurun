@@ -52,6 +52,7 @@ export interface ChannelScanOption {
     type?: apid.ChannelType;
     minCh?: number;
     maxCh?: number;
+    space?: number;
     minSubCh?: number;
     maxSubCh?: number;
     useSubCh?: boolean;

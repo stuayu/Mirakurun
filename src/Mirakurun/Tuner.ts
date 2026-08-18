@@ -23,6 +23,7 @@ import ChannelItem from "./ChannelItem";
 import ServiceItem from "./ServiceItem";
 import TSFilter from "./TSFilter";
 import TSDecoder from "./TSDecoder";
+import { waitForReadyTuner } from "./tunerRetry";
 
 /** サービススキャンの既定タイムアウト (ms) */
 const SERVICE_SCAN_TIMEOUT = 1000 * 20;
@@ -105,7 +106,7 @@ export class Tuner {
             return false;
         }
 
-        while (true) {
+        const selected = await waitForReadyTuner(() => {
             // Keep each tuner paired with the channel it represents. Filtering
             // only the devices shifts the parallel channels array when a
             // tuner is already reserved, which can make us tune the wrong
@@ -118,27 +119,27 @@ export class Tuner {
             const pickableChannels = pickableIndices.map(index => channels[index]);
             if (pickableDevices.length === 0) {
                 log.debug("readyForJob: no pickable tuners for channel type: %s", channels);
-                await common.sleep(1000 * 10);
-                continue;
+                return null;
             }
-            const device = this._pickTunerDevice(pickableDevices, pickableChannels, -1);
-            if (device === null) {
-                // log.debug("readyForJob: no available tuners for channel type: %s", channel.type);
-                await common.sleep(1000 * 10);
-                continue;
-            }
-            // pick したチューナーを少し保持する
-            this._readyForJobPickedDeviceSet.add(device[0]);
-            log.debug("readyForJob: picked device: #%d (%s)", device[0].index, device[0].config.name);
+            return this._pickTunerDevice(pickableDevices, pickableChannels, -1);
+        }, common.sleep);
 
-            setTimeout(() => {
-                // 開放
-                this._readyForJobPickedDeviceSet.delete(device[0]);
-                log.debug("readyForJob: released device: #%d (%s)", device[0].index, device[0].config.name);
-            }, 1000 * 5);
-
-            return true;
+        if (selected === null) {
+            log.warn("readyForJob: timed out waiting for a tuner for channels: %s", channels);
+            return false;
         }
+
+        // pick したチューナーを少し保持する
+        this._readyForJobPickedDeviceSet.add(selected[0]);
+        log.debug("readyForJob: picked device: #%d (%s)", selected[0].index, selected[0].config.name);
+
+        setTimeout(() => {
+            // 開放
+            this._readyForJobPickedDeviceSet.delete(selected[0]);
+            log.debug("readyForJob: released device: #%d (%s)", selected[0].index, selected[0].config.name);
+        }, 1000 * 5);
+
+        return true;
     }
 
     typeExists(type: apid.ChannelType): boolean {
@@ -562,23 +563,17 @@ private _pickTunerDevice(
 
     // 4. takeover existing: 使用中だが優先度が低いデバイスを乗っ取る
     if (selectedDevice === null && priority >= 0) { // priority が負でない場合のみ乗っ取り
-        // 優先度が低い順にソート (元の配列を変更しないようにコピーを作成)
-        const tmp: number[] = []; // 優先度の差を保存するための配列
-        const sortedDevices = [...devices].sort((t1, t2) => {
-            const diff = t1.getPriority() - t2.getPriority();
-            tmp.push(diff);
-            return diff;
-        });
+        // Keep the device and its channel paired while sorting. Sorting the two
+        // arrays independently can tune a shared tuner to another route's channel.
+        const sortedCandidates = devices
+            .map((device, index) => ({ device, channel: channels[index] }))
+            .sort((a, b) => a.device.getPriority() - b.device.getPriority());
 
-        const sortedChannels = [...channels].sort(() => {
-            return tmp.shift();
-        });
-
-        for (let i = 0; i < sortedDevices.length; i++) {
+        for (const candidate of sortedCandidates) {
             // isUsing で、かつ現在の優先度がリクエストの優先度より低い場合
-            if (sortedDevices[i].isUsing === true && sortedDevices[i].getPriority() < priority) {
-                selectedDevice = sortedDevices[i];
-                selectedChannel = sortedChannels[i]; // 乗っ取るチャンネル
+            if (candidate.device.isUsing === true && candidate.device.getPriority() < priority) {
+                selectedDevice = candidate.device;
+                selectedChannel = candidate.channel;
                 log.debug(`Taking over lower priority device ${selectedDevice.config.name} (priority ${selectedDevice.getPriority()}) for channel ${selectedChannel.channel} (request priority ${priority})`);
                 break; // 見つかったらループを抜ける
             }

@@ -3,6 +3,23 @@ const assert = require("assert");
 
 const scan = require("../lib/Mirakurun/api/config/channels/scan");
 
+describe("[scan.spec] /api/config/channel/scan : safety", () => {
+    it("does not allow a channel scan to take over a live stream", () => {
+        assert.strictEqual(scan.CHANNEL_SCAN_PRIORITY, -1);
+    });
+});
+
+describe("[scan.spec] /api/config/channel/scan : parseOptionalNumberQuery", () => {
+    it("preserves zero after OpenAPI query coercion", () => {
+        assert.strictEqual(scan.parseOptionalNumberQuery(0), 0);
+        assert.strictEqual(scan.parseOptionalNumberQuery("0"), 0);
+    });
+
+    it("keeps an omitted parameter undefined", () => {
+        assert.strictEqual(scan.parseOptionalNumberQuery(undefined), undefined);
+    });
+});
+
 describe("[scan.spec] /api/config/channel/scan : generateScanConfig", () => {
     it("GR: Type only", () => {
         const config = scan.generateScanConfig({
