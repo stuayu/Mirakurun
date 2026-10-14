@@ -26,7 +26,7 @@ import Event from "./Event";
 import ChannelItem from "./ChannelItem";
 import TSFilter from "./TSFilter";
 import Client, { ProgramsQuery } from "../client";
-import { consumeTunerStderr, isBonRecTestStartupError } from "./tunerStderr";
+import { consumeTunerStderr, isBonRecTestStartupError, isRemoteStartupError } from "./tunerStderr";
 
 // 選局に時間がかかるチューナーでは、プロセスの再起動間隔も長くなるため、
 // 連続異常終了の判定はこの時間内の失敗だけを対象にする。
@@ -318,6 +318,7 @@ export default class TunerDevice extends EventEmitter {
 
         let processFailureReported = false;
         let bonRecTestStartupFailed = false;
+        let remoteStartupFailed = false;
         const reportProcessFailure = (): void => {
             if (processFailureReported === true || this._closing === true || this._terminationRequested === true) {
                 return;
@@ -352,10 +353,10 @@ export default class TunerDevice extends EventEmitter {
                 this._index, code, signal, this._process.pid
             );
 
-            if (isBonRecTest && (bonRecTestStartupFailed || isBonRecTestStartupError(stderrBuffer))) {
-                // BonRecTest returns -1 after a synchronous startup failure,
-                // such as OpenTuner/SetChannel failure. Retrying the same
-                // process here only creates a respawn loop.
+            if ((isBonRecTest && (bonRecTestStartupFailed || isBonRecTestStartupError(stderrBuffer))) ||
+                (this._isRemote === true && (remoteStartupFailed || isRemoteStartupError(stderrBuffer)))) {
+                // Retrying a process after a startup failure only creates a
+                // respawn loop.
                 this._closing = true;
             } else if (this._closing === false && this._terminationRequested === false) {
                 // Any unexplained exit while users are attached is abnormal,
@@ -374,6 +375,9 @@ export default class TunerDevice extends EventEmitter {
             for (const message of parsed.messages) {
                 if (isBonRecTest && isBonRecTestStartupError(message)) {
                     bonRecTestStartupFailed = true;
+                }
+                if (this._isRemote === true && isRemoteStartupError(message)) {
+                    remoteStartupFailed = true;
                 }
                 // recisdb prints a progress counter to stderr for every TS
                 // buffer. Logging each line floods the log and can starve

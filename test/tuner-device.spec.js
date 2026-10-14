@@ -1,7 +1,7 @@
 const { describe, it } = require("node:test");
 const assert = require("assert");
 
-const { consumeTunerStderr, isBonRecTestStartupError } = require("../lib/Mirakurun/tunerStderr");
+const { consumeTunerStderr, isBonRecTestStartupError, isRemoteStartupError } = require("../lib/Mirakurun/tunerStderr");
 
 describe("[tuner-device.spec] consumeTunerStderr()", () => {
     it("handles CR, LF, and CRLF progress delimiters", () => {
@@ -22,5 +22,12 @@ describe("[tuner-device.spec] consumeTunerStderr()", () => {
         assert.strictEqual(isBonRecTestStartupError("Error: Could not set channel"), true);
         assert.strictEqual(isBonRecTestStartupError("Abort!"), false);
         assert.strictEqual(isBonRecTestStartupError("Signal: 30dB"), false);
+    });
+
+    it("recognizes remote Mirakurun startup errors", () => {
+        assert.strictEqual(isRemoteStartupError("remote: (error) no available tuners"), true);
+        assert.strictEqual(isRemoteStartupError(" remote: (error) channel not found "), true);
+        assert.strictEqual(isRemoteStartupError("remote: connected"), false);
+        assert.strictEqual(isRemoteStartupError("Error: connection lost"), false);
     });
 });

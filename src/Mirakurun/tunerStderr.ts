@@ -20,6 +20,10 @@ export function isBonRecTestStartupError(message: string): boolean {
     return /^Error: .+/.test(message.trim());
 }
 
+export function isRemoteStartupError(message: string): boolean {
+    return /^remote: \(error\)/.test(message.trim());
+}
+
 export function consumeTunerStderr(
     remainder: string,
     data: Buffer | string
