@@ -21,7 +21,8 @@ export function isBonRecTestStartupError(message: string): boolean {
 }
 
 export function isRemoteStartupError(message: string): boolean {
-    return /^remote: \(error\)/.test(message.trim());
+    // Only HTTP responses indicate a remote startup rejection that should not be retried.
+    return /^remote: \(error\) status \d+ .+/.test(message.trim());
 }
 
 export function consumeTunerStderr(

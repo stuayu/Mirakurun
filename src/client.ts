@@ -602,7 +602,10 @@ export class Client {
             return res;
         } else {
             if (res.statusCode) {
-                throw new Error(`Bad status respond (${res.statusCode} ${res.statusMessage}).`);
+                throw Object.assign(new Error(`Bad status respond (${res.statusCode} ${res.statusMessage}).`), {
+                    statusCode: res.statusCode,
+                    statusMessage: res.statusMessage
+                });
             }
             throw res;
         }

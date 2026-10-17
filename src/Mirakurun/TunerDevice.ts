@@ -319,6 +319,7 @@ export default class TunerDevice extends EventEmitter {
         let processFailureReported = false;
         let bonRecTestStartupFailed = false;
         let remoteStartupFailed = false;
+        let remoteStartupErrorLine = "";
         const reportProcessFailure = (): void => {
             if (processFailureReported === true || this._closing === true || this._terminationRequested === true) {
                 return;
@@ -353,10 +354,14 @@ export default class TunerDevice extends EventEmitter {
                 this._index, code, signal, this._process.pid
             );
 
-            if ((isBonRecTest && (bonRecTestStartupFailed || isBonRecTestStartupError(stderrBuffer))) ||
-                (this._isRemote === true && (remoteStartupFailed || isRemoteStartupError(stderrBuffer)))) {
+            const remoteRejected = this._isRemote === true && (remoteStartupFailed || isRemoteStartupError(stderrBuffer));
+            if ((isBonRecTest && (bonRecTestStartupFailed || isBonRecTestStartupError(stderrBuffer))) || remoteRejected) {
                 // Retrying a process after a startup failure only creates a
                 // respawn loop.
+                if (remoteRejected) {
+                    log.warn("TunerDevice#%d remote startup failed (%s); skipping respawn and fault accounting.",
+                        this._index, remoteStartupErrorLine || stderrBuffer.trim());
+                }
                 this._closing = true;
             } else if (this._closing === false && this._terminationRequested === false) {
                 // Any unexplained exit while users are attached is abnormal,
@@ -378,6 +383,7 @@ export default class TunerDevice extends EventEmitter {
                 }
                 if (this._isRemote === true && isRemoteStartupError(message)) {
                     remoteStartupFailed = true;
+                    remoteStartupErrorLine = message;
                 }
                 // recisdb prints a progress counter to stderr for every TS
                 // buffer. Logging each line floods the log and can starve
